@@ -69,16 +69,37 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      crawl4ai:
+        condition: service_healthy
     environment:
       NODE_ENV: ${NODE_ENV:-development}
       DATABASE_URL: postgres://${POSTGRES_USER:-devlaunch}:${POSTGRES_PASSWORD:-devlaunch}@postgres:5432/${POSTGRES_DB:-devlaunch_dev}
       REDIS_URL: redis://redis:6379
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      CRAWL4AI_BASE_URL: http://crawl4ai:${CRAWL4AI_PORT:-11235}
     healthcheck:
       test: ["CMD", "node", "-e", "process.exit(0)"]
       interval: 15s
       timeout: 5s
       retries: 5
+
+  # Website-crawling backend for Crawl4AIResearchAdapter (see
+  # apps/worker/src/agents/researchAdapter.ts and ./websiteCrawler.ts).
+  # Image tag NOT independently verified against the published registry as
+  # part of this change — pin to a specific verified version once confirmed
+  # (this uses :latest only as a placeholder).
+  crawl4ai:
+    image: unclecode/crawl4ai:latest
+    restart: unless-stopped
+    ports:
+      - "${CRAWL4AI_PORT:-11235}:11235"
+    healthcheck:
+      # This image is Python-based (no `node` binary), unlike the other
+      # services' Node healthchecks above — use curl instead.
+      test: ["CMD-SHELL", "curl -f http://localhost:11235/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
   # React + TypeScript dashboard UI (see apps/dashboard), served as a
   # static build. VITE_API_BASE_URL is baked in at build time, so it

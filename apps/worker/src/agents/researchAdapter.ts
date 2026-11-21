@@ -1,11 +1,13 @@
 import type { EvidenceItem } from "@devlaunch/agent-sdk";
+import type { CrawlOrganizationSiteOptions, CrawlOrganizationSiteResult } from "./websiteCrawler.js";
+import { crawlOrganizationSite } from "./websiteCrawler.js";
 
 /**
  * Pluggable research backend for the `market-research` agent. Phase 1 ships
- * only `MockResearchAdapter` (fixture data, no network calls). A later phase
- * adds `Crawl4AIResearchAdapter`, which would call a separate crawl4ai
- * Docker service over HTTP and return the same EvidenceItem[] shape — the
- * agent itself does not need to change, only which adapter it is given.
+ * only `MockResearchAdapter` (fixture data, no network calls). `Crawl4AIResearchAdapter`
+ * (below) calls a separate crawl4ai Docker service over HTTP and returns the
+ * same EvidenceItem[] shape — the agent itself does not need to change, only
+ * which adapter it is given.
  */
 export interface ResearchAdapter {
   research(input: {
@@ -56,22 +58,68 @@ export class MockResearchAdapter implements ResearchAdapter {
 }
 
 /**
- * Later-phase adapter (NOT implemented in Phase 1): would call a separate
- * crawl4ai Docker service over HTTP (e.g. `POST http://crawl4ai:11235/crawl`)
- * and map its response into EvidenceItem[]. Left here only as a documented
- * extension point so the registry/agent code has a concrete place to wire
- * it in once that service exists; it deliberately throws if constructed so
- * it can never be used accidentally in Phase 1.
+ * Real adapter backed by a crawl4ai Docker HTTP service. It implements the
+ * generic `ResearchAdapter` interface (so it's a drop-in swap for
+ * `MockResearchAdapter` wherever one is expected), but that generic
+ * industry/geography/segment/question interface has no organization domain
+ * to crawl — there is no real "crawl the web for an industry overview"
+ * operation here, and this adapter refuses to fabricate one.
+ *
+ * The real capability this adapter provides is crawling a SPECIFIC,
+ * already-known organization's own website for business information
+ * (contact, about, departments, placement/training, news pages) — see
+ * `crawlOrganizationSite` in ./websiteCrawler.ts, exposed here both as a
+ * re-export and as the `crawlOrganizationSite` instance method below.
+ *
+ * Honesty contract (mirrors MockResearchAdapter's explicit `mock: true`):
+ * this adapter never returns fabricated/mocked results. If the crawl4ai
+ * service at `baseUrl` is unreachable or errors, it throws
+ * (see CrawlServiceUnreachableError in ./websiteCrawler.ts) rather than
+ * silently falling back to placeholder data.
  */
 export class Crawl4AIResearchAdapter implements ResearchAdapter {
-  constructor(_opts: { baseUrl: string }) {
+  private readonly baseUrl: string;
+
+  constructor(opts: { baseUrl: string }) {
+    if (!opts?.baseUrl) {
+      throw new Error("Crawl4AIResearchAdapter requires a { baseUrl } pointing at a running crawl4ai HTTP service.");
+    }
+    this.baseUrl = opts.baseUrl;
+  }
+
+  /**
+   * Satisfies the generic ResearchAdapter contract, but intentionally does
+   * NOT attempt real research here: the generic industry/geography/segment
+   * input carries no organization domain to crawl, so any "answer" this
+   * method could return would necessarily be vague fabricated text — the
+   * exact anti-pattern this adapter exists to avoid. Callers that have a
+   * specific organization (and its domain) should call
+   * `crawlOrganizationSite` directly instead.
+   */
+  async research(_input: {
+    industry: string;
+    geography: string;
+    segment: string;
+    question: string;
+  }): Promise<EvidenceItem[]> {
     throw new Error(
-      "Crawl4AIResearchAdapter is not implemented in Phase 1 (see apps/worker/src/agents/researchAdapter.ts). " +
-        "Use MockResearchAdapter instead.",
+      "Crawl4AIResearchAdapter.research() (the generic ResearchAdapter interface) is not supported: real " +
+        "website research requires a specific organization domain to crawl, which this generic " +
+        "industry/geography/segment/question interface does not provide. Call " +
+        "crawlOrganizationSite(orgDomain, opts) on this adapter (or the standalone crawlOrganizationSite() " +
+        "export in ./websiteCrawler.ts) for the real Crawl4AI-backed site-crawling capability.",
     );
   }
 
-  research(): Promise<EvidenceItem[]> {
-    throw new Error("Crawl4AIResearchAdapter is not implemented in Phase 1.");
+  /**
+   * The real deliverable: crawl a known organization's own website for
+   * business-relevant pages. See ./websiteCrawler.ts for the crawling,
+   * robots.txt, rate-limiting and extraction logic.
+   */
+  async crawlOrganizationSite(
+    orgDomain: string,
+    opts?: CrawlOrganizationSiteOptions,
+  ): Promise<CrawlOrganizationSiteResult> {
+    return crawlOrganizationSite(this.baseUrl, orgDomain, opts);
   }
 }

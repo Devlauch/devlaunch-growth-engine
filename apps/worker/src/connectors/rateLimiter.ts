@@ -15,6 +15,11 @@ export class SlidingWindowRateLimiter {
   private readonly windowMs: number;
   private readonly maxPerWindow: number;
   private timestamps: number[] = [];
+  // Tracks whichever clock function was last passed to acquire(), so
+  // currentCount (used mainly by tests with a fake clock) stays consistent
+  // with the same notion of "now" acquire() itself is using, instead of
+  // always falling back to the real wall clock.
+  private lastClock: () => number = Date.now;
 
   constructor(maxPerMinute: number, windowMs = 60_000) {
     if (!Number.isFinite(maxPerMinute) || maxPerMinute <= 0) {
@@ -26,7 +31,7 @@ export class SlidingWindowRateLimiter {
 
   /** Number of calls currently counted within the active window. */
   get currentCount(): number {
-    const cutoff = Date.now() - this.windowMs;
+    const cutoff = this.lastClock() - this.windowMs;
     this.timestamps = this.timestamps.filter((t) => t > cutoff);
     return this.timestamps.length;
   }
@@ -34,6 +39,7 @@ export class SlidingWindowRateLimiter {
   /** Resolves immediately if under the limit; otherwise waits until the
    * oldest call in the current window ages out, then records this call. */
   async acquire(now: () => number = Date.now): Promise<void> {
+    this.lastClock = now;
     for (;;) {
       const cutoff = now() - this.windowMs;
       this.timestamps = this.timestamps.filter((t) => t > cutoff);
