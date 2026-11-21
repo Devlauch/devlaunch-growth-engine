@@ -91,12 +91,26 @@ export async function requireTenantMembership(req: Request, res: Response, next:
  * returned with app.current_tenant_id still "set" beyond this request —
  * though since it's set with the tx-local flag, COMMIT/ROLLBACK clears it
  * regardless.
+ *
+ * Every route in this app (plus errorHandler.ts/notFoundHandler.ts)
+ * responds via res.json(), so the commit/rollback happens *inside* that
+ * call, before it writes any bytes to the socket — not on the "finish"
+ * event, which fires only after the response is already on the wire. The
+ * earlier finish/close-based version left a real race: a client that
+ * received a 2xx response and immediately issued its next request could
+ * have that next request's own transaction start, and query, before this
+ * one's COMMIT had actually run — a read-committed snapshot simply
+ * wouldn't see the just-written row yet (reproduced via real sequential
+ * HTTP calls: stale GETs immediately after a POST/PATCH, duplicate-check
+ * races, etc.). Committing before the response leaves the process closes
+ * that window entirely.
  */
 function attachTenantDbLifecycle(req: Request, res: Response, client: import("pg").PoolClient): void {
-  let finished = false;
-  const finish = async () => {
-    if (finished) return;
-    finished = true;
+  let settled = false;
+
+  async function finalize(): Promise<void> {
+    if (settled) return;
+    settled = true;
     try {
       if (res.statusCode >= 400) {
         await client.query("ROLLBACK");
@@ -108,7 +122,20 @@ function attachTenantDbLifecycle(req: Request, res: Response, client: import("pg
     } finally {
       client.release();
     }
-  };
-  res.once("finish", finish);
-  res.once("close", finish);
+  }
+
+  const originalJson = res.json.bind(res);
+  res.json = ((body?: unknown) => {
+    finalize()
+      .catch((err) => logger.error({ err }, "failed to finalize tenant-scoped transaction before responding"))
+      .then(() => originalJson(body));
+    return res;
+  }) as typeof res.json;
+
+  // Fallback only: a request whose connection is aborted before any
+  // handler ever calls res.json (so the override above never runs) must
+  // still release its pooled client instead of leaking it.
+  res.once("close", () => {
+    void finalize();
+  });
 }

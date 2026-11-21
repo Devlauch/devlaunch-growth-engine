@@ -99,7 +99,7 @@ export interface AgentExecutionSummary {
   agent_instance_name: string;
 }
 
-export type LeadSource = "internal" | "public_widget" | "agent" | "import";
+export type LeadSource = "internal" | "public_widget" | "agent" | "import" | "discovery";
 
 export interface Lead {
   id: string;
@@ -180,6 +180,66 @@ export interface IntegrationEntry {
   status: IntegrationStatus;
   scopes: string[];
   updatedAt: string | null;
+}
+
+// Lead discovery: see apps/api/src/routes/discovery.ts. Only
+// connector_type 'public_directory' (OpenStreetMap via the free Overpass
+// API — no API key, no crawling) is approved to actually run today; the
+// other connector_type values exist in the DB's CHECK constraint for a
+// future phase but the API rejects creating a source with them.
+export type DiscoveryConnectorType = "public_directory" | "website_crawl" | "csv_upload" | "licensed_api";
+
+export interface DiscoverySource {
+  id: string;
+  tenant_id: string;
+  project_id: string;
+  connector_type: DiscoveryConnectorType;
+  name: string;
+  enabled: boolean;
+  rate_limit_per_minute: number;
+  terms_note: string | null;
+  config: { industry?: string; geography?: string; limit?: number } & Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export type ContactChannel = "role_based" | "named_person" | "contact_form" | "phone";
+export type VerificationStatus = "verified" | "unverified" | "role_based" | "risky" | "invalid";
+
+export interface DiscoveredContact {
+  id: string;
+  organization_id: string;
+  name: string | null;
+  role_title: string | null;
+  email: string | null;
+  phone: string | null;
+  contact_channel: ContactChannel;
+  verification_status: VerificationStatus;
+  created_at: string;
+}
+
+export type DiscoveredOrganizationStatus = "new" | "researched" | "duplicate" | "archived";
+
+export interface DiscoveredOrganization {
+  id: string;
+  tenant_id: string;
+  project_id: string;
+  discovery_source_id: string | null;
+  name: string;
+  domain: string | null;
+  source_url: string;
+  discovered_at: string;
+  status: DiscoveredOrganizationStatus;
+  contacts: DiscoveredContact[];
+}
+
+export interface DiscoveryRunResult {
+  organizationsFound: number;
+  organizationsCreated: number;
+  organizationsDuplicate: number;
+  contactsCreated: number;
+  contactsDuplicate: number;
+  organizations: DiscoveredOrganization[];
 }
 
 export type ApprovalStatus = "pending" | "approved" | "rejected" | "expired";

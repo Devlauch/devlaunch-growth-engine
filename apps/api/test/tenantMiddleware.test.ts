@@ -23,6 +23,7 @@ function makeReqRes(tenantId: string, userId = "user-1") {
   const res = {
     statusCode: 200,
     once: vi.fn(),
+    json: vi.fn(),
   } as unknown as Response;
   return { req, res };
 }

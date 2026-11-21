@@ -11,6 +11,7 @@ import {
   IconMenu,
   IconPlug,
   IconSearch,
+  IconCompass,
   IconTarget,
   IconUsers,
   IconZap,
@@ -126,6 +127,14 @@ export function Layout({ children, crumbs, tenantName, projectName, hasLeads = t
                       Leads
                     </AnchorNavItem>
                   ) : null}
+                  <NavLink
+                    to={`/tenants/${tenantId}/projects/${projectId}/discovery`}
+                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/discovery`)}
+                    icon={<IconCompass />}
+                    onClick={closeMobileNav}
+                  >
+                    Discovery
+                  </NavLink>
                   <NavLink
                     to={`/tenants/${tenantId}/projects/${projectId}/campaigns`}
                     active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/campaigns`)}

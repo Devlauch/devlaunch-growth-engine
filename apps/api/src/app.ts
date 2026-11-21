@@ -23,6 +23,9 @@ import { leadsRouter } from "./routes/leads.js";
 import { campaignsRouter } from "./routes/campaigns.js";
 import { analyticsRouter } from "./routes/analytics.js";
 import { integrationsRouter } from "./routes/integrations.js";
+import { discoverySourcesRouter, discoveredOrganizationsRouter } from "./routes/discovery.js";
+import { scoringRubricsRouter, leadScoresRouter } from "./routes/scoring.js";
+import { priorityQueueRouter } from "./routes/priorityQueue.js";
 
 export function createApp(): express.Express {
   const app = express();
@@ -63,6 +66,15 @@ export function createApp(): express.Express {
   app.use("/api/v1/tenants/:tenantId/projects/:projectId/campaigns", mainCors, campaignsRouter);
   app.use("/api/v1/tenants/:tenantId/projects/:projectId/analytics", mainCors, analyticsRouter);
   app.use("/api/v1/tenants/:tenantId/projects/:projectId/integrations", mainCors, integrationsRouter);
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/discovery-sources", mainCors, discoverySourcesRouter);
+  app.use(
+    "/api/v1/tenants/:tenantId/projects/:projectId/discovered-organizations",
+    mainCors,
+    discoveredOrganizationsRouter,
+  );
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/scoring-rubrics", mainCors, scoringRubricsRouter);
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/lead-scores", mainCors, leadScoresRouter);
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/priority-queue", mainCors, priorityQueueRouter);
   app.use("/api/v1/tenants/:tenantId/agent-executions", mainCors, tenantAgentExecutionRouter);
   app.use("/api/v1/tenants/:tenantId/approvals", mainCors, approvalsRouter);
   app.use("/api/v1/tenants/:tenantId/audit-events", mainCors, auditEventsRouter);

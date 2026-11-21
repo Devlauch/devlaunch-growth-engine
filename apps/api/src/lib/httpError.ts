@@ -19,4 +19,5 @@ export const Errors = {
   badRequest: (message = "Bad request", details?: unknown) => new HttpError(400, "bad_request", message, details),
   tooManyRequests: (message = "Too many requests") => new HttpError(429, "rate_limited", message),
   internal: (message = "Internal server error") => new HttpError(500, "internal_error", message),
+  badGateway: (message = "Upstream source failed") => new HttpError(502, "bad_gateway", message),
 };

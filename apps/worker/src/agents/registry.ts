@@ -1,5 +1,6 @@
 import { AgentRegistry } from "@devlaunch/agent-sdk";
 import { marketResearchDefinition, runMarketResearch } from "./marketResearch.js";
+import { leadScoringDefinition, runLeadScoring } from "./leadScoring.js";
 
 // TODO(mastra-migration): once @mastra/core publishes a stable, non-alpha
 // semver (current is 1.86.0-alpha.3 — see packages/agent-sdk/README.md for
@@ -16,10 +17,12 @@ export type AgentExecutor = (input: unknown) => Promise<unknown>;
 /** Registry of AgentDefinitions this worker knows about. */
 export const agentRegistry = new AgentRegistry();
 agentRegistry.register(marketResearchDefinition);
+agentRegistry.register(leadScoringDefinition);
 
 /** Maps an agent id -> the function that actually runs it. */
 const executors: Record<string, AgentExecutor> = {
   "market-research": (input) => runMarketResearch(input),
+  "lead-scoring": (input) => runLeadScoring(input),
 };
 
 export function getExecutor(agentId: string): AgentExecutor | undefined {

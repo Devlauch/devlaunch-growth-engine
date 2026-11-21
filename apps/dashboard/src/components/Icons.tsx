@@ -146,3 +146,12 @@ export function IconPlug(props: SVGProps<SVGSVGElement>) {
     </Icon>
   );
 }
+
+export function IconCompass(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="m15 9-2 6-6 2 2-6 6-2Z" />
+    </Icon>
+  );
+}

@@ -5,7 +5,7 @@ export function Badge({ tone, children }: { tone: "neutral" | "info" | "success"
 }
 
 export function sourceBadgeTone(source: string): "info" | "neutral" {
-  return source === "public_widget" ? "info" : "neutral";
+  return source === "public_widget" || source === "discovery" ? "info" : "neutral";
 }
 
 export function sourceLabel(source: string): string {
@@ -19,8 +19,23 @@ export function sourceLabel(source: string): string {
       return "Agent";
     case "import":
       return "Import";
+    case "discovery":
+      return "Discovery";
     default:
       return source;
+  }
+}
+
+export function discoveredOrgStatusTone(status: string): "neutral" | "info" | "success" | "warn" | "danger" {
+  switch (status) {
+    case "researched":
+      return "success";
+    case "duplicate":
+      return "warn";
+    case "archived":
+      return "neutral";
+    default: // new
+      return "info";
   }
 }
 
