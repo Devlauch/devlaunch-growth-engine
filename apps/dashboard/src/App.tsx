@@ -9,6 +9,8 @@ import { ProjectPage } from "./pages/ProjectPage";
 import { ExecutionPage } from "./pages/ExecutionPage";
 import { CampaignsPage } from "./pages/CampaignsPage";
 import { CampaignDetailPage } from "./pages/CampaignDetailPage";
+import { AnalyticsPage } from "./pages/AnalyticsPage";
+import { IntegrationsPage } from "./pages/IntegrationsPage";
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { user, loading } = useAuth();
@@ -61,6 +63,22 @@ export function App() {
         element={
           <RequireAuth>
             <CampaignDetailPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/tenants/:tenantId/projects/:projectId/analytics"
+        element={
+          <RequireAuth>
+            <AnalyticsPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/tenants/:tenantId/projects/:projectId/integrations"
+        element={
+          <RequireAuth>
+            <IntegrationsPage />
           </RequireAuth>
         }
       />

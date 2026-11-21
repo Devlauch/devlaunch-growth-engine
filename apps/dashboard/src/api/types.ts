@@ -141,6 +141,47 @@ export interface CampaignMember {
   source: LeadSource;
 }
 
+export interface StatusCount {
+  status: string;
+  count: number;
+}
+
+export interface LeadsPerDay {
+  day: string;
+  count: number;
+}
+
+// GET /tenants/:tenantId/projects/:projectId/analytics/overview — every
+// field here is a real SQL aggregate, never an estimated/fabricated value.
+export interface AnalyticsOverview {
+  leads: {
+    total: number;
+    byStatus: StatusCount[];
+    perDay: LeadsPerDay[];
+  };
+  campaigns: {
+    byStatus: StatusCount[];
+  };
+  agentExecutions: {
+    byStatus: StatusCount[];
+  };
+}
+
+export type IntegrationProvider = "twenty" | "mautic" | "postiz" | "listmonk" | "posthog" | "formbricks";
+export type IntegrationStatus = "not_connected" | "pending_setup" | "connected" | "error";
+
+// GET /tenants/:tenantId/projects/:projectId/integrations — a registry
+// entry, never a working live connection in this phase (see
+// apps/api/src/routes/integrations.ts).
+export interface IntegrationEntry {
+  provider: IntegrationProvider;
+  label: string;
+  category: string;
+  status: IntegrationStatus;
+  scopes: string[];
+  updatedAt: string | null;
+}
+
 export type ApprovalStatus = "pending" | "approved" | "rejected" | "expired";
 
 export interface Approval {

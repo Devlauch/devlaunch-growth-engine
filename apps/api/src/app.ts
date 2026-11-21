@@ -21,6 +21,8 @@ import { auditEventsRouter } from "./routes/auditEvents.js";
 import { publicLeadsRouter } from "./routes/publicLeads.js";
 import { leadsRouter } from "./routes/leads.js";
 import { campaignsRouter } from "./routes/campaigns.js";
+import { analyticsRouter } from "./routes/analytics.js";
+import { integrationsRouter } from "./routes/integrations.js";
 
 export function createApp(): express.Express {
   const app = express();
@@ -59,6 +61,8 @@ export function createApp(): express.Express {
   app.use("/api/v1/tenants/:tenantId/projects/:projectId/agent-executions", mainCors, projectAgentExecutionsRouter);
   app.use("/api/v1/tenants/:tenantId/projects/:projectId/leads", mainCors, leadsRouter);
   app.use("/api/v1/tenants/:tenantId/projects/:projectId/campaigns", mainCors, campaignsRouter);
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/analytics", mainCors, analyticsRouter);
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/integrations", mainCors, integrationsRouter);
   app.use("/api/v1/tenants/:tenantId/agent-executions", mainCors, tenantAgentExecutionRouter);
   app.use("/api/v1/tenants/:tenantId/approvals", mainCors, approvalsRouter);
   app.use("/api/v1/tenants/:tenantId/audit-events", mainCors, auditEventsRouter);

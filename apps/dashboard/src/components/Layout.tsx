@@ -72,20 +72,6 @@ function AnchorNavItem({ href, icon, children, onClick }: { href: string; icon: 
   );
 }
 
-// A nav entry for a section shown in the reference design that has no real
-// backing data/route yet (no campaigns table, no integrations table). Never
-// a clickable link to nowhere — just a clearly-labeled, disabled row with a
-// "soon" badge, so the sidebar previews upcoming structure without faking a page.
-function SoonNavItem({ icon, children }: { icon: ReactNode; children: ReactNode }) {
-  return (
-    <span className="nav-item nav-item-disabled" aria-disabled="true">
-      <span className="nav-icon">{icon}</span>
-      <span>{children}</span>
-      <span className="nav-soon-badge">Soon</span>
-    </span>
-  );
-}
-
 export function Layout({ children, crumbs, tenantName, projectName, hasLeads = true }: LayoutProps) {
   const { user, logout } = useAuth();
   const location = useLocation();
@@ -116,8 +102,6 @@ export function Layout({ children, crumbs, tenantName, projectName, hasLeads = t
           <NavLink to="/" active={location.pathname === "/"} icon={<IconBuilding />} onClick={closeMobileNav}>
             Organizations
           </NavLink>
-          <SoonNavItem icon={<IconChart />}>Analytics</SoonNavItem>
-          <SoonNavItem icon={<IconPlug />}>Integrations</SoonNavItem>
 
           {tenantId ? (
             <>
@@ -149,6 +133,22 @@ export function Layout({ children, crumbs, tenantName, projectName, hasLeads = t
                     onClick={closeMobileNav}
                   >
                     Campaigns
+                  </NavLink>
+                  <NavLink
+                    to={`/tenants/${tenantId}/projects/${projectId}/analytics`}
+                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/analytics`)}
+                    icon={<IconChart />}
+                    onClick={closeMobileNav}
+                  >
+                    Analytics
+                  </NavLink>
+                  <NavLink
+                    to={`/tenants/${tenantId}/projects/${projectId}/integrations`}
+                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/integrations`)}
+                    icon={<IconPlug />}
+                    onClick={closeMobileNav}
+                  >
+                    Integrations
                   </NavLink>
                   <AnchorNavItem href="#settings-section" icon={<IconKey />} onClick={closeMobileNav}>
                     Settings
