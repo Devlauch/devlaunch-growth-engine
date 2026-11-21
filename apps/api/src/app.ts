@@ -26,6 +26,18 @@ import { integrationsRouter } from "./routes/integrations.js";
 import { discoverySourcesRouter, discoveredOrganizationsRouter } from "./routes/discovery.js";
 import { scoringRubricsRouter, leadScoresRouter } from "./routes/scoring.js";
 import { priorityQueueRouter } from "./routes/priorityQueue.js";
+import {
+  suppressionRouter,
+  consentRecordsRouter,
+  countrySendSettingsRouter,
+  publicUnsubscribeRouter,
+} from "./routes/compliance.js";
+import { messageDraftsRouter } from "./routes/messaging.js";
+import { sequencesRouter } from "./routes/sequences.js";
+import { sendingDomainsRouter, warmupConfigsRouter, sendHealthRouter } from "./routes/sendingSetup.js";
+import { onboardingRouter } from "./routes/onboarding.js";
+import { repliesRouter } from "./routes/replies.js";
+import { learningLoopRouter } from "./routes/learningLoop.js";
 
 export function createApp(): express.Express {
   const app = express();
@@ -51,6 +63,7 @@ export function createApp(): express.Express {
 
   app.use("/api/v1/health", mainCors, healthRouter);
   app.use("/api/v1/public", publicCors, publicLeadsRouter);
+  app.use("/api/v1/public", publicCors, publicUnsubscribeRouter);
 
   app.use("/api/v1/auth", mainCors, authRouter);
   app.use("/api/v1/tenants", mainCors, tenantsRouter);
@@ -75,6 +88,29 @@ export function createApp(): express.Express {
   app.use("/api/v1/tenants/:tenantId/projects/:projectId/scoring-rubrics", mainCors, scoringRubricsRouter);
   app.use("/api/v1/tenants/:tenantId/projects/:projectId/lead-scores", mainCors, leadScoresRouter);
   app.use("/api/v1/tenants/:tenantId/projects/:projectId/priority-queue", mainCors, priorityQueueRouter);
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/suppression-list", mainCors, suppressionRouter);
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/consent-records", mainCors, consentRecordsRouter);
+  app.use(
+    "/api/v1/tenants/:tenantId/projects/:projectId/country-send-settings",
+    mainCors,
+    countrySendSettingsRouter,
+  );
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/message-drafts", mainCors, messageDraftsRouter);
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/sequences", mainCors, sequencesRouter);
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/sending-domains", mainCors, sendingDomainsRouter);
+  app.use(
+    "/api/v1/tenants/:tenantId/projects/:projectId/sending-domains/:sendingDomainId/warmup",
+    mainCors,
+    warmupConfigsRouter,
+  );
+  app.use(
+    "/api/v1/tenants/:tenantId/projects/:projectId/sending-domains/:sendingDomainId/health",
+    mainCors,
+    sendHealthRouter,
+  );
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/onboarding", mainCors, onboardingRouter);
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/leads/:leadId/replies", mainCors, repliesRouter);
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/learning-loop", mainCors, learningLoopRouter);
   app.use("/api/v1/tenants/:tenantId/agent-executions", mainCors, tenantAgentExecutionRouter);
   app.use("/api/v1/tenants/:tenantId/approvals", mainCors, approvalsRouter);
   app.use("/api/v1/tenants/:tenantId/audit-events", mainCors, auditEventsRouter);

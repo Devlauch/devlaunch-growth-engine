@@ -80,7 +80,24 @@ describe("PATCH /api/v1/tenants/:tenantId/projects/:projectId (widget settings)"
       ([sql]) => typeof sql === "string" && sql.includes("UPDATE projects"),
     );
     expect(updateCall).toBeDefined();
-    expect(updateCall![1]).toEqual([PROJECT_1, TENANT_A, null, null, null, true, allowedOrigins]);
+    // Trailing params are the widget-config presence-flag/value pairs
+    // (see projects.ts); none of those fields were sent, so every flag is
+    // false and every value is null.
+    expect(updateCall![1]).toEqual([
+      PROJECT_1,
+      TENANT_A,
+      null,
+      null,
+      null,
+      true,
+      allowedOrigins,
+      false,
+      null,
+      false,
+      null,
+      false,
+      null,
+    ]);
 
     const auditCall = queryMock.mock.calls.find(
       ([sql]) => typeof sql === "string" && sql.includes("INSERT INTO audit_events"),
@@ -158,5 +175,131 @@ describe("PATCH /api/v1/tenants/:tenantId/projects/:projectId (widget settings)"
     expect(res.status).toBe(403);
     expect(queryMock).not.toHaveBeenCalledWith(expect.stringContaining("UPDATE projects"), expect.anything());
     expect(releaseMock).toHaveBeenCalled();
+  });
+});
+
+describe("PATCH /api/v1/tenants/:tenantId/projects/:projectId (widget config fields)", () => {
+  it("sets widgetQualifyingQuestion/widgetBookingLinkUrl/widgetThankYouMessage and returns them", async () => {
+    const app = buildApp();
+
+    queryMock
+      .mockResolvedValueOnce(undefined) // BEGIN
+      .mockResolvedValueOnce(undefined) // set_config
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: "m1", role: "owner", status: "active" }] }) // membership
+      .mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [
+          {
+            id: PROJECT_1,
+            tenant_id: TENANT_A,
+            name: "Acme Launch",
+            slug: "acme-launch",
+            description: null,
+            status: "active",
+            public_api_key: "pk_abc123",
+            allowed_origins: [],
+            public_widget_enabled: false,
+            widget_qualifying_question: "What's your biggest challenge right now?",
+            widget_booking_link_url: "https://cal.example.com/acme",
+            widget_thank_you_message: "Thanks so much, we'll follow up shortly.",
+            updated_at: "2026-01-01T00:00:00.000Z",
+          },
+        ],
+      }) // UPDATE ... RETURNING
+      .mockResolvedValueOnce(undefined); // INSERT audit_events
+
+    const res = await request(app)
+      .patch(`/api/v1/tenants/${TENANT_A}/projects/${PROJECT_1}`)
+      .set("X-Dev-User-Id", USER_1)
+      .send({
+        widgetQualifyingQuestion: "What's your biggest challenge right now?",
+        widgetBookingLinkUrl: "https://cal.example.com/acme",
+        widgetThankYouMessage: "Thanks so much, we'll follow up shortly.",
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.project.widget_qualifying_question).toBe("What's your biggest challenge right now?");
+    expect(res.body.project.widget_booking_link_url).toBe("https://cal.example.com/acme");
+    expect(res.body.project.widget_thank_you_message).toBe("Thanks so much, we'll follow up shortly.");
+
+    const updateCall = queryMock.mock.calls.find(
+      ([sql]) => typeof sql === "string" && sql.includes("UPDATE projects"),
+    );
+    expect(updateCall).toBeDefined();
+    expect(updateCall![1]).toEqual([
+      PROJECT_1,
+      TENANT_A,
+      null,
+      null,
+      null,
+      null,
+      null,
+      true,
+      "What's your biggest challenge right now?",
+      true,
+      "https://cal.example.com/acme",
+      true,
+      "Thanks so much, we'll follow up shortly.",
+    ]);
+  });
+
+  it("clears a previously-set widget field to null when the field is explicitly sent as null", async () => {
+    const app = buildApp();
+
+    queryMock
+      .mockResolvedValueOnce(undefined) // BEGIN
+      .mockResolvedValueOnce(undefined) // set_config
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: "m1", role: "owner", status: "active" }] }) // membership
+      .mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [
+          {
+            id: PROJECT_1,
+            tenant_id: TENANT_A,
+            name: "Acme Launch",
+            slug: "acme-launch",
+            description: null,
+            status: "active",
+            public_api_key: "pk_abc123",
+            allowed_origins: [],
+            public_widget_enabled: false,
+            widget_qualifying_question: null,
+            widget_booking_link_url: "https://cal.example.com/acme",
+            widget_thank_you_message: null,
+            updated_at: "2026-01-01T00:00:00.000Z",
+          },
+        ],
+      })
+      .mockResolvedValueOnce(undefined); // INSERT audit_events
+
+    const res = await request(app)
+      .patch(`/api/v1/tenants/${TENANT_A}/projects/${PROJECT_1}`)
+      .set("X-Dev-User-Id", USER_1)
+      .send({ widgetQualifyingQuestion: null });
+
+    expect(res.status).toBe(200);
+    expect(res.body.project.widget_qualifying_question).toBeNull();
+
+    const updateCall = queryMock.mock.calls.find(
+      ([sql]) => typeof sql === "string" && sql.includes("UPDATE projects"),
+    );
+    expect(updateCall).toBeDefined();
+    // hasWidgetQualifyingQuestion = true, value = null; the other two
+    // widget fields were never sent, so their flags are false.
+    expect(updateCall![1]).toEqual([
+      PROJECT_1,
+      TENANT_A,
+      null,
+      null,
+      null,
+      null,
+      null,
+      true,
+      null,
+      false,
+      null,
+      false,
+      null,
+    ]);
   });
 });

@@ -79,6 +79,11 @@ services:
       # require this to start or to run the market-research agent (which
       # uses MockResearchAdapter by default) or the discovery connectors
       # (which use the free PublicDirectoryConnector, not this service).
+      # Verified 2026-11-21 against a live unclecode/crawl4ai:0.9.6
+      # container (see docs/CRAWL4AI_VERIFICATION.md): that service also
+      # requires CRAWL4AI_API_TOKEN (same value as the crawl4ai service
+      # below) to be passed to HttpCrawl4AIBackend's apiToken option —
+      # without it, /crawl returns 401 for every request.
       CRAWL4AI_BASE_URL: ${CRAWL4AI_BASE_URL:-}
     healthcheck:
       test: ["CMD", "node", "-e", "process.exit(0)"]
@@ -92,20 +97,47 @@ services:
   # used by anything enabled by default (market-research uses
   # MockResearchAdapter; lead discovery uses the free PublicDirectoryConnector,
   # not this). Pulls an external image (unclecode/crawl4ai) on first use.
-  # Image tag NOT independently verified against the published registry —
-  # pin to a specific verified version before relying on this for anything
-  # real (this uses :latest only as a placeholder).
+  #
+  # Verified 2026-11-21 against a real running container (see
+  # docs/CRAWL4AI_VERIFICATION.md for the full session):
+  #   - Image tag pinned to `0.9.6` (was `:latest`) — confirmed this tag
+  #     resolves to the exact digest `:latest` pulled during verification.
+  #   - `/health` is the correct healthcheck path and does return 200 with
+  #     `{"status":"ok",...}` once the service is actually reachable.
+  #   - IMPORTANT: this image's entrypoint binds the API to the
+  #     CONTAINER's own loopback (127.0.0.1) ONLY unless CRAWL4AI_API_TOKEN
+  #     is set at container start — with no token, the `ports:` mapping
+  #     below is a no-op (the host and every other container get
+  #     "connection refused"/"connection reset", and the container still
+  #     reports itself healthy because its *internal* healthcheck curls its
+  #     own loopback). Set CRAWL4AI_API_TOKEN (e.g. in a local .env; no
+  #     default is baked in here on purpose) before relying on this
+  #     service from outside its own container.
+  #   - Once reachable, `/crawl` itself ALSO requires
+  #     `Authorization: Bearer <CRAWL4AI_API_TOKEN>` (401
+  #     `{"detail":"Authentication required"}` otherwise) — see
+  #     HttpCrawl4AIBackend in apps/worker/src/agents/websiteCrawler.ts,
+  #     which now sends this header when its apiToken option (or the
+  #     CRAWL4AI_API_TOKEN env var) is set.
   # To start ONLY this service once you've decided to use it:
-  #   docker compose --profile crawl4ai up -d crawl4ai
+  #   CRAWL4AI_API_TOKEN=<your-token> docker compose --profile crawl4ai up -d crawl4ai
   crawl4ai:
-    image: unclecode/crawl4ai:latest
+    image: unclecode/crawl4ai:0.9.6
     profiles: ["crawl4ai"]
     restart: unless-stopped
+    environment:
+      # No default on purpose: see the loopback-bind note above — an
+      # operator must consciously set this before exposing the service.
+      CRAWL4AI_API_TOKEN: ${CRAWL4AI_API_TOKEN:-}
     ports:
       - "${CRAWL4AI_PORT:-11235}:11235"
     healthcheck:
       # This image is Python-based (no `node` binary), unlike the other
-      # services' Node healthchecks above — use curl instead.
+      # services' Node healthchecks above — use curl instead. Note this
+      # healthcheck runs *inside* the container against its own loopback,
+      # so it reports healthy even when CRAWL4AI_API_TOKEN is unset and the
+      # service is unreachable from outside — healthy here is necessary,
+      # not sufficient; see the note above.
       test: ["CMD-SHELL", "curl -f http://localhost:11235/health || exit 1"]
       interval: 10s
       timeout: 5s

@@ -259,18 +259,170 @@ describe("lead-scores route", () => {
     expect(insertCall).toBeDefined();
   });
 
-  it("returns 501 for recompute (not yet wired to evidence sources)", async () => {
+  it("404s recompute when the project has no active rubric", async () => {
     const app = buildApp();
     queueResponses([
       ...mockMembership(),
       { rowCount: 1, rows: [{}] }, // project exists
-      { rowCount: 1, rows: [{ id: LEAD_1 }] }, // lead exists
+      { rowCount: 1, rows: [{ id: LEAD_1, email: "a@acme.com", company: "Acme", custom_fields: {} }] }, // lead exists
+      { rowCount: 0, rows: [] }, // no active rubric
     ]);
 
     const res = await request(app)
       .post(`/api/v1/tenants/${TENANT_A}/projects/${PROJECT_1}/lead-scores/${LEAD_1}/recompute`)
       .set("X-Dev-User-Id", USER_1);
 
-    expect(res.status).toBe(501);
+    expect(res.status).toBe(404);
+  });
+
+  it("recomputes a score from custom_fields evidence (full credit for a matched criterion, zero for a missing one)", async () => {
+    const app = buildApp();
+    const criteria = [
+      { key: "budget_confirmed", label: "Budget confirmed", weight: 60 },
+      { key: "decision_maker", label: "Talked to a decision maker", weight: 40 },
+    ];
+    queueResponses([
+      ...mockMembership(),
+      { rowCount: 1, rows: [{}] }, // project exists
+      {
+        rowCount: 1,
+        rows: [
+          {
+            id: LEAD_1,
+            email: null,
+            company: null,
+            custom_fields: { Budget_Confirmed: "yes, $50k" },
+          },
+        ],
+      }, // lead exists, has matching custom_fields evidence (case-insensitive key)
+      { rowCount: 1, rows: [{ id: RUBRIC_1, criteria, is_active: true }] }, // active rubric
+      // no email/company on this lead, so no discovered_organizations lookups happen
+      {
+        rowCount: 1,
+        rows: [
+          {
+            id: "score-1",
+            lead_id: LEAD_1,
+            rubric_id: RUBRIC_1,
+            total_score: "60",
+            criteria_evidence: {
+              budget_confirmed: { score: 60, maxScore: 60, hasEvidence: true },
+              decision_maker: { score: 0, maxScore: 40, hasEvidence: false },
+            },
+            why_summary: "...",
+            next_research_note: "...",
+          },
+        ],
+      }, // upsert
+    ]);
+
+    const res = await request(app)
+      .post(`/api/v1/tenants/${TENANT_A}/projects/${PROJECT_1}/lead-scores/${LEAD_1}/recompute`)
+      .set("X-Dev-User-Id", USER_1);
+
+    expect(res.status).toBe(200);
+    expect(res.body.score.lead_id).toBe(LEAD_1);
+
+    const upsertCall = queryMock.mock.calls.find(
+      ([sql]) => typeof sql === "string" && sql.includes("INSERT INTO lead_scores"),
+    );
+    expect(upsertCall).toBeDefined();
+    const params = upsertCall![1] as unknown[];
+    // total_score (index 4) should reflect full credit for budget_confirmed only: 60/100 * 100 = 60.
+    expect(params[4]).toBe(60);
+    const criteriaEvidence = JSON.parse(params[5] as string);
+    expect(criteriaEvidence.budget_confirmed.hasEvidence).toBe(true);
+    expect(criteriaEvidence.budget_confirmed.score).toBe(60);
+    expect(criteriaEvidence.decision_maker.hasEvidence).toBe(false);
+    expect(criteriaEvidence.decision_maker.score).toBe(0);
+    // ON CONFLICT upsert, not a plain insert.
+    expect(upsertCall![0]).toContain("ON CONFLICT (lead_id) DO UPDATE");
+  });
+
+  it("scores 0 for every criterion when there is no matching evidence anywhere", async () => {
+    const app = buildApp();
+    const criteria = [{ key: "has_budget", label: "Has budget", weight: 100 }];
+    queueResponses([
+      ...mockMembership(),
+      { rowCount: 1, rows: [{}] }, // project exists
+      {
+        rowCount: 1,
+        rows: [{ id: LEAD_1, email: "nobody@unknown-domain-xyz.com", company: "Totally Unmatched Co", custom_fields: {} }],
+      }, // lead exists, no custom_fields evidence
+      { rowCount: 1, rows: [{ id: RUBRIC_1, criteria, is_active: true }] }, // active rubric
+      { rowCount: 0, rows: [] }, // no discovered_organizations match by domain
+      { rowCount: 0, rows: [] }, // no discovered_organizations match by name
+      {
+        rowCount: 1,
+        rows: [
+          {
+            id: "score-1",
+            lead_id: LEAD_1,
+            total_score: "0",
+            criteria_evidence: { has_budget: { score: 0, maxScore: 100, hasEvidence: false } },
+            why_summary: "...",
+            next_research_note: "...",
+          },
+        ],
+      }, // upsert
+    ]);
+
+    const res = await request(app)
+      .post(`/api/v1/tenants/${TENANT_A}/projects/${PROJECT_1}/lead-scores/${LEAD_1}/recompute`)
+      .set("X-Dev-User-Id", USER_1);
+
+    expect(res.status).toBe(200);
+    const upsertCall = queryMock.mock.calls.find(
+      ([sql]) => typeof sql === "string" && sql.includes("INSERT INTO lead_scores"),
+    );
+    const params = upsertCall![1] as unknown[];
+    expect(params[4]).toBe(0);
+  });
+
+  it("finds org evidence by matched discovered_organizations/discovered_contacts data when custom_fields has none", async () => {
+    const app = buildApp();
+    const criteria = [{ key: "enterprise_scale", label: "Enterprise scale", weight: 100 }];
+    const ORG_1 = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    queueResponses([
+      ...mockMembership(),
+      { rowCount: 1, rows: [{}] }, // project exists
+      {
+        rowCount: 1,
+        rows: [{ id: LEAD_1, email: "jane@acme.com", company: null, custom_fields: {} }],
+      }, // lead exists
+      { rowCount: 1, rows: [{ id: RUBRIC_1, criteria, is_active: true }] }, // active rubric
+      {
+        rowCount: 1,
+        rows: [{ id: ORG_1, name: "Acme Corp", raw_metadata: { notes: "This is an enterprise scale deployment" } }],
+      }, // matched by normalized_domain
+      { rowCount: 0, rows: [] }, // no contacts
+      {
+        rowCount: 1,
+        rows: [
+          {
+            id: "score-1",
+            lead_id: LEAD_1,
+            total_score: "100",
+            criteria_evidence: { enterprise_scale: { score: 100, maxScore: 100, hasEvidence: true } },
+            why_summary: "...",
+            next_research_note: "...",
+          },
+        ],
+      }, // upsert
+    ]);
+
+    const res = await request(app)
+      .post(`/api/v1/tenants/${TENANT_A}/projects/${PROJECT_1}/lead-scores/${LEAD_1}/recompute`)
+      .set("X-Dev-User-Id", USER_1);
+
+    expect(res.status).toBe(200);
+    const upsertCall = queryMock.mock.calls.find(
+      ([sql]) => typeof sql === "string" && sql.includes("INSERT INTO lead_scores"),
+    );
+    const params = upsertCall![1] as unknown[];
+    expect(params[4]).toBe(100);
+    const criteriaEvidence = JSON.parse(params[5] as string);
+    expect(criteriaEvidence.enterprise_scale.hasEvidence).toBe(true);
+    expect(criteriaEvidence.enterprise_scale.evidenceSource).toContain(ORG_1);
   });
 });

@@ -12,6 +12,11 @@ import { CampaignDetailPage } from "./pages/CampaignDetailPage";
 import { AnalyticsPage } from "./pages/AnalyticsPage";
 import { IntegrationsPage } from "./pages/IntegrationsPage";
 import { DiscoveryPage } from "./pages/DiscoveryPage";
+import { ScoringPage } from "./pages/ScoringPage";
+import { PriorityQueuePage } from "./pages/PriorityQueuePage";
+import { WidgetSettingsPage } from "./pages/WidgetSettingsPage";
+import { SendingSetupPage } from "./pages/SendingSetupPage";
+import { OnboardingWizardPage } from "./pages/OnboardingWizardPage";
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { user, loading } = useAuth();
@@ -88,6 +93,46 @@ export function App() {
         element={
           <RequireAuth>
             <DiscoveryPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/tenants/:tenantId/projects/:projectId/scoring"
+        element={
+          <RequireAuth>
+            <ScoringPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/tenants/:tenantId/projects/:projectId/priority-queue"
+        element={
+          <RequireAuth>
+            <PriorityQueuePage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/tenants/:tenantId/projects/:projectId/widget-settings"
+        element={
+          <RequireAuth>
+            <WidgetSettingsPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/tenants/:tenantId/projects/:projectId/sending-setup"
+        element={
+          <RequireAuth>
+            <SendingSetupPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/tenants/:tenantId/projects/:projectId/onboarding"
+        element={
+          <RequireAuth>
+            <OnboardingWizardPage />
           </RequireAuth>
         }
       />

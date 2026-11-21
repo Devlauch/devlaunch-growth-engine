@@ -13,12 +13,27 @@ import { z } from "zod";
  * (the caller must already have set app.current_tenant_id on `client`,
  * exactly like any other tenant-scoped write) — is identical.
  */
+// Roadmap item 6 ("Inbound lead capture"): UTM/source tracking + the one
+// qualifying question answer, captured by packages/embed-widget/embed.js.
+// This is an unauthenticated public endpoint's input (see
+// src/routes/publicLeads.ts), so every new field is an optional string
+// with a conservative max length to prevent abuse — none of them are
+// trusted/parsed beyond that.
+const widgetTrackingFieldSchema = z.string().trim().max(500).optional();
+
 export const leadInputSchema = z.object({
   name: z.string().trim().min(1).max(200).optional(),
   email: z.string().trim().email().max(320).optional(),
   company: z.string().trim().max(200).optional(),
   message: z.string().trim().max(5000).optional(),
   customFields: z.record(z.string(), z.unknown()).optional(),
+  utmSource: widgetTrackingFieldSchema,
+  utmMedium: widgetTrackingFieldSchema,
+  utmCampaign: widgetTrackingFieldSchema,
+  utmTerm: widgetTrackingFieldSchema,
+  utmContent: widgetTrackingFieldSchema,
+  referrerUrl: widgetTrackingFieldSchema,
+  qualifyingAnswer: widgetTrackingFieldSchema,
 }).refine((v) => Boolean(v.name || v.email), {
   message: "At least one of name or email is required",
 });
@@ -45,8 +60,11 @@ export async function ingestLead(params: IngestLeadParams): Promise<IngestedLead
   const { client, tenantId, projectId, input, source, origin, ipHash } = params;
 
   const result = await client.query<{ id: string; created_at: string }>(
-    `INSERT INTO leads (tenant_id, project_id, name, email, company, message, custom_fields, source, origin, ip_hash)
-     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10)
+    `INSERT INTO leads (
+       tenant_id, project_id, name, email, company, message, custom_fields, source, origin, ip_hash,
+       utm_source, utm_medium, utm_campaign, utm_term, utm_content, referrer_url, qualifying_answer
+     )
+     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
      RETURNING id, created_at`,
     [
       tenantId,
@@ -59,6 +77,13 @@ export async function ingestLead(params: IngestLeadParams): Promise<IngestedLead
       source,
       origin ?? null,
       ipHash ?? null,
+      input.utmSource ?? null,
+      input.utmMedium ?? null,
+      input.utmCampaign ?? null,
+      input.utmTerm ?? null,
+      input.utmContent ?? null,
+      input.referrerUrl ?? null,
+      input.qualifyingAnswer ?? null,
     ],
   );
 

@@ -34,6 +34,98 @@ const perKeyLimiter = rateLimitMiddleware({
 
 const publicKeyParamSchema = z.string().trim().min(8).max(200);
 
+// Config fetch is cheap (single read) but still unauthenticated-by-design,
+// so it shares the exact same per-IP/per-key rate limiters as the lead
+// submission endpoint below.
+const configPerIpLimiter = rateLimitMiddleware({
+  windowMs: 60_000,
+  max: env.publicLeadsRateLimitPerIpPerMin,
+  name: "public-widget-config-ip",
+  keyFn: (req) => hashIp(req.ip ?? "unknown"),
+});
+
+const configPerKeyLimiter = rateLimitMiddleware({
+  windowMs: 60_000,
+  max: env.publicLeadsRateLimitPerKeyPerMin,
+  name: "public-widget-config-key",
+  keyFn: (req) => req.params.projectPublicKey,
+});
+
+/**
+ * GET /api/v1/public/projects/:projectPublicKey/config
+ *
+ * Roadmap item 6 ("Inbound lead capture"): lets the embeddable widget
+ * (packages/embed-widget/embed.js) fetch a project's public-safe widget
+ * config — the qualifying question to render, the post-submit booking
+ * link, and the thank-you copy — before rendering, WITHOUT exposing
+ * anything sensitive (no public_api_key, no allowed_origins, no tenant
+ * id). Protected the exact same way as the POST endpoint below: an
+ * unknown/disabled key is a 404, and the request must come from an
+ * allowlisted Origin, enforced via the same
+ * 019_public_project_lookup_rls.sql RLS policy (app.lookup_public_api_key).
+ */
+publicLeadsRouter.get(
+  "/projects/:projectPublicKey/config",
+  configPerIpLimiter,
+  configPerKeyLimiter,
+  async (req, res, next) => {
+    const client = await pool.connect();
+    let settled = false;
+    try {
+      const projectPublicKey = publicKeyParamSchema.parse(req.params.projectPublicKey);
+      const origin = req.header("origin") ?? null;
+
+      await client.query("BEGIN");
+      await client.query("SELECT set_config('app.lookup_public_api_key', $1, true)", [projectPublicKey]);
+
+      const projectResult = await client.query(
+        `SELECT allowed_origins, public_widget_enabled,
+                widget_qualifying_question, widget_booking_link_url, widget_thank_you_message
+         FROM projects
+         WHERE public_api_key = $1`,
+        [projectPublicKey],
+      );
+
+      if (projectResult.rowCount === 0 || !projectResult.rows[0].public_widget_enabled) {
+        await client.query("ROLLBACK");
+        settled = true;
+        client.release();
+        next(Errors.notFound("Unknown or disabled project key"));
+        return;
+      }
+
+      const project = projectResult.rows[0];
+      const allowedOrigins: string[] = project.allowed_origins ?? [];
+
+      if (allowedOrigins.length === 0 || !origin || !allowedOrigins.includes(origin)) {
+        await client.query("ROLLBACK");
+        settled = true;
+        client.release();
+        next(Errors.forbidden("Origin not allowed for this project"));
+        return;
+      }
+
+      await client.query("COMMIT");
+      settled = true;
+      client.release();
+
+      res.json({
+        config: {
+          widgetQualifyingQuestion: project.widget_qualifying_question ?? null,
+          widgetBookingLinkUrl: project.widget_booking_link_url ?? null,
+          widgetThankYouMessage: project.widget_thank_you_message ?? null,
+        },
+      });
+    } catch (err) {
+      if (!settled) {
+        await client.query("ROLLBACK").catch(() => undefined);
+        client.release();
+      }
+      next(err);
+    }
+  },
+);
+
 /**
  * POST /api/v1/public/projects/:projectPublicKey/leads
  *

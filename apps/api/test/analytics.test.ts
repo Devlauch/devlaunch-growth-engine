@@ -50,6 +50,24 @@ function queueResponses(responses: unknown[]) {
   }
 }
 
+/** Like queueResponses, but an Error entry is queued as a rejection instead of a resolution. */
+function queueMixedResponses(responses: unknown[]) {
+  for (const r of responses) {
+    if (r instanceof Error) {
+      queryMock.mockRejectedValueOnce(r);
+    } else {
+      queryMock.mockResolvedValueOnce(r);
+    }
+  }
+}
+
+/** A pg-style "relation does not exist" error, exactly what Postgres raises for a missing table. */
+function undefinedTableError(tableName: string): Error {
+  const err = new Error(`relation "${tableName}" does not exist`) as Error & { code?: string };
+  err.code = "42P01";
+  return err;
+}
+
 describe("tenant isolation on analytics routes", () => {
   it("denies a user with no active membership in the target tenant", async () => {
     const app = buildApp();
@@ -140,5 +158,146 @@ describe("analytics overview — real aggregates only", () => {
     expect(res.body.campaigns.byStatus).toEqual([]);
     expect(res.body.agentExecutions.byStatus).toEqual([]);
     expect(res.body.leads.perDay).toEqual([]);
+  });
+});
+
+describe("analytics funnel — real counts, honest degradation when sibling tables are missing", () => {
+  it("returns real counts straight from the aggregate queries when every funnel table exists", async () => {
+    const app = buildApp();
+    queueResponses([
+      ...mockMembership(),
+      { rowCount: 1, rows: [{}] }, // project exists
+      undefined, // SAVEPOINT (discovered_organizations)
+      { rowCount: 1, rows: [{ count: 5 }] }, // discovered_organizations count
+      undefined, // RELEASE SAVEPOINT
+      { rowCount: 1, rows: [{ count: 20 }] }, // leads total
+      undefined, // SAVEPOINT (qualified combined)
+      { rowCount: 1, rows: [{ count: 8 }] }, // qualified combined (status OR score)
+      undefined, // RELEASE SAVEPOINT
+      undefined, // SAVEPOINT (contacted)
+      { rowCount: 1, rows: [{ count: 6 }] }, // contacted
+      undefined, // RELEASE SAVEPOINT
+      undefined, // SAVEPOINT (replied)
+      { rowCount: 1, rows: [{ count: 4 }] }, // replied
+      undefined, // RELEASE SAVEPOINT
+      undefined, // SAVEPOINT (demo)
+      { rowCount: 1, rows: [{ count: 2 }] }, // demo (stopped_meeting_booked proxy)
+      undefined, // RELEASE SAVEPOINT
+      { rowCount: 2, rows: [{ source: "agent", count: 8 }, { source: "internal", count: 12 }] }, // bySource
+      undefined, // SAVEPOINT (byChannel)
+      { rowCount: 2, rows: [{ channel: "email", count: 5 }, { channel: "whatsapp", count: 3 }] }, // byChannel
+      undefined, // RELEASE SAVEPOINT
+    ]);
+
+    const res = await request(app)
+      .get(`/api/v1/tenants/${TENANT_A}/projects/${PROJECT_1}/analytics/funnel`)
+      .set("X-Dev-User-Id", USER_1);
+
+    expect(res.status).toBe(200);
+    expect(res.body.funnel.discovered.discoveredOrganizations.count).toBe(5);
+    expect(res.body.funnel.discovered.discoveredOrganizations.note).toBeUndefined();
+    expect(res.body.funnel.discovered.leads.count).toBe(20);
+    expect(res.body.funnel.qualified.count).toBe(8);
+    expect(res.body.funnel.qualified.note).toBeUndefined();
+    expect(res.body.funnel.contacted.count).toBe(6);
+    expect(res.body.funnel.replied.count).toBe(4);
+    expect(res.body.funnel.demo.count).toBe(2);
+    expect(res.body.funnel.demo.note).toMatch(/stopped_meeting_booked/);
+    expect(res.body.funnel.demo.degradedNote).toBeUndefined();
+    // won is never fabricated — no schema status represents it.
+    expect(res.body.funnel.won).toEqual({
+      count: 0,
+      note: expect.stringContaining("no 'won' lead status exists"),
+    });
+    expect(res.body.breakdowns.bySource).toEqual([
+      { source: "agent", count: 8 },
+      { source: "internal", count: 12 },
+    ]);
+    expect(res.body.breakdowns.bySegment).toEqual({
+      breakdown: [],
+      note: expect.stringContaining("icp_profiles"),
+    });
+    expect(res.body.breakdowns.byChannel.breakdown).toEqual([
+      { channel: "email", count: 5 },
+      { channel: "whatsapp", count: 3 },
+    ]);
+    expect(res.body.breakdowns.byChannel.note).toBeUndefined();
+    expect(res.body.breakdowns.byMessageVariant.breakdown).toEqual(res.body.breakdowns.byChannel.breakdown);
+
+    // Every real query must stay scoped to the authenticated tenant/project.
+    const discoveredCall = queryMock.mock.calls.find(
+      ([sql]) => typeof sql === "string" && sql.includes("FROM discovered_organizations"),
+    );
+    expect(discoveredCall![1]).toEqual([TENANT_A, PROJECT_1]);
+  });
+
+  it("degrades honestly (never 500s, never fabricates) when none of the newer funnel tables exist yet", async () => {
+    const app = buildApp();
+    queueMixedResponses([
+      ...mockMembership(),
+      { rowCount: 1, rows: [{}] }, // project exists
+      undefined, // SAVEPOINT (discovered_organizations)
+      undefinedTableError("discovered_organizations"),
+      undefined, // ROLLBACK TO SAVEPOINT
+      undefined, // RELEASE SAVEPOINT
+      { rowCount: 1, rows: [{ count: 9 }] }, // leads total (leads always exists)
+      undefined, // SAVEPOINT (qualified combined)
+      undefinedTableError("lead_scores"),
+      undefined, // ROLLBACK TO SAVEPOINT
+      undefined, // RELEASE SAVEPOINT
+      { rowCount: 1, rows: [{ count: 3 }] }, // fallback: status-only qualified count
+      undefined, // SAVEPOINT (contacted)
+      undefinedTableError("message_drafts"),
+      undefined, // ROLLBACK TO SAVEPOINT
+      undefined, // RELEASE SAVEPOINT
+      undefined, // SAVEPOINT (replied)
+      undefinedTableError("lead_replies"),
+      undefined, // ROLLBACK TO SAVEPOINT
+      undefined, // RELEASE SAVEPOINT
+      undefined, // SAVEPOINT (demo)
+      undefinedTableError("sequence_enrollments"),
+      undefined, // ROLLBACK TO SAVEPOINT
+      undefined, // RELEASE SAVEPOINT
+      { rowCount: 1, rows: [{ source: "internal", count: 9 }] }, // bySource (leads always exists)
+      undefined, // SAVEPOINT (byChannel)
+      undefinedTableError("message_draft_variants"),
+      undefined, // ROLLBACK TO SAVEPOINT
+      undefined, // RELEASE SAVEPOINT
+    ]);
+
+    const res = await request(app)
+      .get(`/api/v1/tenants/${TENANT_A}/projects/${PROJECT_1}/analytics/funnel`)
+      .set("X-Dev-User-Id", USER_1);
+
+    // The missing sibling tables must never turn into a 500.
+    expect(res.status).toBe(200);
+    expect(res.body.funnel.discovered.discoveredOrganizations).toEqual({
+      count: 0,
+      note: expect.stringContaining("discovered_organizations table does not exist"),
+    });
+    expect(res.body.funnel.discovered.leads.count).toBe(9);
+    // qualified degrades to the status-only half of the union, honestly noted.
+    expect(res.body.funnel.qualified.count).toBe(3);
+    expect(res.body.funnel.qualified.note).toContain("lead_scores table does not exist");
+    expect(res.body.funnel.contacted).toEqual({
+      count: 0,
+      note: expect.stringContaining("message_drafts table does not exist"),
+    });
+    expect(res.body.funnel.replied).toEqual({
+      count: 0,
+      note: expect.stringContaining("lead_replies table does not exist"),
+    });
+    expect(res.body.funnel.demo.count).toBe(0);
+    expect(res.body.funnel.demo.degradedNote).toContain("sequence_enrollments table does not exist");
+    expect(res.body.funnel.won).toEqual({
+      count: 0,
+      note: expect.stringContaining("no 'won' lead status exists"),
+    });
+    expect(res.body.breakdowns.bySource).toEqual([{ source: "internal", count: 9 }]);
+    expect(res.body.breakdowns.byChannel).toEqual({
+      breakdown: [],
+      note: expect.stringContaining("message_draft_variants table does not exist"),
+    });
+    expect(releaseMock).toHaveBeenCalled();
   });
 });

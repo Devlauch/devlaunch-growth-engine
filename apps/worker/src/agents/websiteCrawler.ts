@@ -11,11 +11,12 @@ import { parseRobotsTxt } from "./robotsTxt.js";
  *     phone numbers — never login-walled content or personal profiles.
  *   - Delegates the actual page fetch to a `CrawlBackend`, with
  *     `HttpCrawl4AIBackend` as the one real HTTP implementation. The
- *     exact Crawl4AI Docker HTTP API shape (endpoint path, request/response
- *     JSON) is NOT independently verified against a live instance as part
- *     of this change — see the comment on `HttpCrawl4AIBackend` below. The
- *     `CrawlBackend` interface exists specifically so that detail can be
- *     corrected later without touching any of the crawl logic in this file.
+ *     Crawl4AI Docker HTTP API shape (endpoint path, request/response JSON,
+ *     and its auth requirement) WAS verified against a real running
+ *     `unclecode/crawl4ai:0.9.6` container — see the comment on
+ *     `HttpCrawl4AIBackend` below and docs/CRAWL4AI_VERIFICATION.md for the
+ *     verification session. The `CrawlBackend` interface is kept anyway so
+ *     a future Crawl4AI version change can still be isolated to this class.
  */
 
 export type PageType = "contact" | "about" | "departments" | "placement" | "news" | "other";
@@ -71,6 +72,16 @@ export interface CrawlOrganizationSiteOptions {
   backend?: CrawlBackend;
   /** Swap in a fake fetch for tests (used for the robots.txt request only). */
   fetchImpl?: typeof fetch;
+  /**
+   * Bearer token for the crawl4ai service's own `/crawl` endpoint. Verified
+   * against a live `unclecode/crawl4ai:0.9.6` instance: the image refuses to
+   * bind to anything but its own container loopback unless
+   * `CRAWL4AI_API_TOKEN` is set at container start, and once reachable,
+   * `/crawl` itself returns 401 `{"detail":"Authentication required"}`
+   * without a matching `Authorization: Bearer <token>` header. Defaults to
+   * the `CRAWL4AI_API_TOKEN` environment variable.
+   */
+  apiToken?: string;
 }
 
 const DEFAULT_USER_AGENT = "DevLaunchResearchBot/1.0 (+business-research; contact: platform-team)";
@@ -111,26 +122,41 @@ export interface CrawlBackend {
 /**
  * Real HTTP implementation calling a Crawl4AI Docker service.
  *
- * NOT independently verified against a live instance. Implemented against
- * Crawl4AI's documented Docker server API as of this change: a synchronous
- * `POST {baseUrl}/crawl` accepting `{ urls: string[] }` (optionally more
- * crawler config) and returning `{ results: [{ url, success, status_code,
- * html, markdown, metadata: { title } }] }`. If the deployed service uses
- * the async `/crawl` + `/task/{id}` polling flow instead (older/newer
- * Crawl4AI versions differ here), only this class needs to change.
+ * Verified 2026-11-21 against a real, running `unclecode/crawl4ai:0.9.6`
+ * container (see docs/CRAWL4AI_VERIFICATION.md for the full session). The
+ * contract this class was originally written against — a synchronous
+ * `POST {baseUrl}/crawl` accepting `{ urls: string[] }` and returning
+ * `{ results: [{ html, metadata: { title } }] }` — was CONFIRMED correct for
+ * the success path. The one gap found: `/crawl` requires
+ * `Authorization: Bearer <token>` (verified response otherwise: `401
+ * {"detail":"Authentication required"}`, header `www-authenticate: Bearer`),
+ * and the container itself refuses to bind to anything but its own loopback
+ * unless `CRAWL4AI_API_TOKEN` is set at container start (see
+ * docker-compose.yml's `crawl4ai` service). A real successful response's
+ * `results[0]` also carries many more fields than this class reads
+ * (`markdown` as a structured object, `links`, `media`, `screenshot`, …) —
+ * only `html`, `status_code`/`success`, and `metadata.title` are consumed
+ * here, which is all `fetchPage`'s callers need.
  */
 export class HttpCrawl4AIBackend implements CrawlBackend {
+  private readonly apiToken?: string;
+
   constructor(
     private readonly baseUrl: string,
     private readonly fetchImpl: typeof fetch = fetch,
-  ) {}
+    apiToken?: string,
+  ) {
+    this.apiToken = apiToken ?? process.env.CRAWL4AI_API_TOKEN;
+  }
 
   async fetchPage(url: string): Promise<CrawlFetchResult> {
     let response: Response;
     try {
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (this.apiToken) headers.Authorization = `Bearer ${this.apiToken}`;
       response = await this.fetchImpl(`${this.baseUrl.replace(/\/+$/, "")}/crawl`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({ urls: [url] }),
       });
     } catch (err) {
@@ -141,6 +167,18 @@ export class HttpCrawl4AIBackend implements CrawlBackend {
 
     if (response.status >= 500) {
       throw new CrawlServiceUnreachableError(this.baseUrl, new Error(`HTTP ${response.status} ${response.statusText}`));
+    }
+    if (response.status === 401 || response.status === 403) {
+      // Verified against a live instance: this means the service is
+      // misconfigured/missing its CRAWL4AI_API_TOKEN (or ours doesn't
+      // match) — a service-level problem for every page, not "this one page
+      // doesn't exist". Treating it as a per-page skip would silently look
+      // like "the organization's site has none of these pages" instead of
+      // the real cause.
+      throw new CrawlServiceUnreachableError(
+        this.baseUrl,
+        new Error(`HTTP ${response.status}: crawl4ai rejected the request (missing/invalid CRAWL4AI_API_TOKEN?)`),
+      );
     }
     if (!response.ok) {
       // A 4xx for a single page (e.g. page genuinely 404s) is not a
@@ -295,7 +333,7 @@ export async function crawlOrganizationSite(
 ): Promise<CrawlOrganizationSiteResult> {
   const userAgent = opts.userAgent ?? DEFAULT_USER_AGENT;
   const fetchImpl = opts.fetchImpl ?? fetch;
-  const backend = opts.backend ?? new HttpCrawl4AIBackend(baseUrl, fetchImpl);
+  const backend = opts.backend ?? new HttpCrawl4AIBackend(baseUrl, fetchImpl, opts.apiToken);
   const siteRoot = normalizeOrgDomain(orgDomain);
   const paths = opts.paths ?? DEFAULT_CANDIDATE_PATHS;
   const maxPages = opts.maxPages ?? paths.length;

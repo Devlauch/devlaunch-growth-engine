@@ -6,11 +6,13 @@ import {
   IconBuilding,
   IconChart,
   IconClose,
+  IconInbox,
   IconKey,
   IconLayers,
   IconMenu,
   IconPlug,
   IconSearch,
+  IconSettings,
   IconCompass,
   IconTarget,
   IconUsers,
@@ -136,6 +138,22 @@ export function Layout({ children, crumbs, tenantName, projectName, hasLeads = t
                     Discovery
                   </NavLink>
                   <NavLink
+                    to={`/tenants/${tenantId}/projects/${projectId}/priority-queue`}
+                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/priority-queue`)}
+                    icon={<IconInbox />}
+                    onClick={closeMobileNav}
+                  >
+                    Priority Queue
+                  </NavLink>
+                  <NavLink
+                    to={`/tenants/${tenantId}/projects/${projectId}/scoring`}
+                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/scoring`)}
+                    icon={<IconChart />}
+                    onClick={closeMobileNav}
+                  >
+                    Scoring
+                  </NavLink>
+                  <NavLink
                     to={`/tenants/${tenantId}/projects/${projectId}/campaigns`}
                     active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/campaigns`)}
                     icon={<IconTarget />}
@@ -158,6 +176,30 @@ export function Layout({ children, crumbs, tenantName, projectName, hasLeads = t
                     onClick={closeMobileNav}
                   >
                     Integrations
+                  </NavLink>
+                  <NavLink
+                    to={`/tenants/${tenantId}/projects/${projectId}/onboarding`}
+                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/onboarding`)}
+                    icon={<IconZap />}
+                    onClick={closeMobileNav}
+                  >
+                    Onboarding
+                  </NavLink>
+                  <NavLink
+                    to={`/tenants/${tenantId}/projects/${projectId}/widget-settings`}
+                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/widget-settings`)}
+                    icon={<IconKey />}
+                    onClick={closeMobileNav}
+                  >
+                    Widget Settings
+                  </NavLink>
+                  <NavLink
+                    to={`/tenants/${tenantId}/projects/${projectId}/sending-setup`}
+                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/sending-setup`)}
+                    icon={<IconSettings />}
+                    onClick={closeMobileNav}
+                  >
+                    Sending Setup
                   </NavLink>
                   <AnchorNavItem href="#settings-section" icon={<IconKey />} onClick={closeMobileNav}>
                     Settings

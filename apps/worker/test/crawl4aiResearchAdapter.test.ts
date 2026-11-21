@@ -80,4 +80,70 @@ describe("HttpCrawl4AIBackend", () => {
     expect(result.html).toContain("About");
     expect(result.title).toBe("About Acme");
   });
+
+  // Verified against a real running unclecode/crawl4ai:0.9.6 container
+  // (see docs/CRAWL4AI_VERIFICATION.md): a successful /crawl response's
+  // real shape is richer than the two fields this class reads — `markdown`
+  // in particular is a structured object, not a string — but `html` and
+  // `metadata.title` are read exactly as the mocked shape above models them.
+  it("parses the full real crawl4ai 0.9.6 response shape (markdown as an object, extra fields ignored)", async () => {
+    const backend = new HttpCrawl4AIBackend(
+      "http://crawl4ai.invalid",
+      (async () =>
+        new Response(
+          JSON.stringify({
+            success: true,
+            results: [
+              {
+                url: "https://example.com",
+                html: "<!DOCTYPE html><html><head><title>Example Domain</title></head><body><h1>Example Domain</h1></body></html>",
+                success: true,
+                cleaned_html: "<html><head><title>Example Domain</title></head><body></body></html>",
+                markdown: { raw_markdown: "# Example Domain", markdown_with_citations: "# Example Domain" },
+                metadata: { title: "Example Domain", description: null, keywords: null, author: null },
+                status_code: 200,
+                error_message: null,
+              },
+            ],
+            server_processing_time_s: 0.4,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        )) as unknown as typeof fetch,
+    );
+    const result = await backend.fetchPage("https://example.com");
+    expect(result.statusCode).toBe(200);
+    expect(result.html).toContain("Example Domain");
+    expect(result.title).toBe("Example Domain");
+  });
+
+  it("sends an Authorization: Bearer header when constructed with an apiToken", async () => {
+    let capturedHeaders: Record<string, string> | undefined;
+    const backend = new HttpCrawl4AIBackend(
+      "http://crawl4ai.invalid",
+      (async (_url: string, init?: RequestInit) => {
+        capturedHeaders = init?.headers as Record<string, string>;
+        return new Response(JSON.stringify({ results: [{ html: "<p>ok</p>" }] }), { status: 200 });
+      }) as unknown as typeof fetch,
+      "my-secret-token",
+    );
+    await backend.fetchPage("http://acme.test/about");
+    expect(capturedHeaders?.Authorization).toBe("Bearer my-secret-token");
+  });
+
+  // Verified against a live instance: /crawl returns 401
+  // {"detail":"Authentication required"} without a valid bearer token —
+  // this is a service misconfiguration, not a single page 404, so it must
+  // surface as CrawlServiceUnreachableError (abort), never a silent
+  // per-page skip.
+  it("throws CrawlServiceUnreachableError on a 401 (missing/invalid CRAWL4AI_API_TOKEN)", async () => {
+    const backend = new HttpCrawl4AIBackend(
+      "http://crawl4ai.invalid",
+      (async () =>
+        new Response(JSON.stringify({ detail: "Authentication required" }), {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        })) as unknown as typeof fetch,
+    );
+    await expect(backend.fetchPage("http://acme.test/about")).rejects.toBeInstanceOf(CrawlServiceUnreachableError);
+  });
 });
