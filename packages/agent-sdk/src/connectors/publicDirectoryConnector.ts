@@ -168,7 +168,14 @@ export class OverpassDirectoryApiClient implements DirectoryApiClient {
 
     const res = await this.fetchFn(this.endpoint, {
       method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        // Overpass's public instance returns 406 Not Acceptable for
+        // requests with no/default User-Agent (confirmed live) — required
+        // for identification per the Overpass usage policy this module's
+        // header comment already references.
+        "User-Agent": "DevLaunchGrowthEngine-PublicDirectoryConnector/0.1 (+https://github.com/devlaunch; contact: devlaunch-dev@example.com)",
+      },
       body: `data=${encodeURIComponent(query)}`,
     });
 
