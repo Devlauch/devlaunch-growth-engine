@@ -41,4 +41,25 @@ export {
   type RawDirectoryListing,
   type PublicDirectorySearchInput,
 } from "./connectors/publicDirectoryConnector.js";
+// Milestone 3 Phase 2 port: Google Programmable Search + Apollo.io
+// connectors. Each module defines its own NotConfiguredError/
+// RateLimitedError (same per-module convention as
+// publicDirectoryConnector.ts/decisionMakerProvider.ts — these are
+// intentionally distinct classes, not shared, so they're re-exported here
+// under distinct aliases to avoid colliding with publicDirectoryConnector's
+// NotConfiguredError above.
+export {
+  GoogleSearchConnector,
+  NotConfiguredError as GoogleSearchNotConfiguredError,
+  RateLimitedError as GoogleSearchRateLimitedError,
+  MalformedResponseError as GoogleSearchMalformedResponseError,
+  type GoogleSearchConnectorInput,
+} from "./connectors/googleSearchConnector.js";
+export {
+  ApolloConnector,
+  NotConfiguredError as ApolloNotConfiguredError,
+  RateLimitedError as ApolloRateLimitedError,
+  MalformedResponseError as ApolloMalformedResponseError,
+  type ApolloConnectorInput,
+} from "./connectors/apolloConnector.js";
 export { getConnector, listConnectors } from "./connectors/registry.js";
