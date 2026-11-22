@@ -245,7 +245,7 @@ const updateDealSchema = z
     expectedCloseDate: z.string().date().nullish(),
     ownerUserId: z.string().uuid().nullish(),
     // Ported from milestone3-phase2 (packages/db/migrations/
-    // 441_add_outcome_reasons_to_deals.sql): the spec's "record lost/won
+    // 442_add_outcome_reasons_to_deals.sql): the spec's "record lost/won
     // outcomes" requirement — moving a deal to 'lost' requires a reason,
     // moving to 'won' accepts an optional one. This does not change which
     // stage transitions are allowed (still unrestricted, per this file's
@@ -272,7 +272,7 @@ const updateDealSchema = z
  * lead appear in the `customers` view.
  *
  * lostReason/wonReason (packages/db/migrations/
- * 441_add_outcome_reasons_to_deals.sql, ported from milestone3-phase2):
+ * 442_add_outcome_reasons_to_deals.sql, ported from milestone3-phase2):
  * moving a deal to 'lost' requires lostReason in the body (rejected
  * otherwise); moving to 'won' accepts an optional wonReason. This does not
  * add a transition-adjacency restriction — any stage can still move to any

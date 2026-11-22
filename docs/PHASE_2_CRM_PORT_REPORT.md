@@ -14,7 +14,7 @@ One genuinely missing piece was found and ported (narrowly, not the whole file):
 - Ported the validation phase2's deals.ts had: moving a deal to `stage: 'lost'` now requires `lostReason` in the PATCH body (rejected with 400 otherwise); moving to `'won'` accepts an optional `wonReason`. This does **not** add a transition-adjacency restriction (master's deals.ts explicitly documents that any stage can move to any other stage) — it only requires a reason alongside these two specific target stages, exactly like phase2's version did.
 - Everything else in phase2's deals.ts (separate `PATCH /:dealId/stage` endpoint, `TERMINAL_DEAL_STAGES` import, its own `createDealSchema`/`updateDealSchema` shapes) was **not** ported — master's single `PATCH /:id` handler already covers stage + value + close date + owner in one call, and folding lostReason/wonReason into that existing schema was the narrower, non-disruptive change.
 
-Files touched: `apps/api/src/routes/deals.ts` (DEAL_COLUMNS, updateDealSchema, PATCH SQL), `packages/db/migrations/441_add_outcome_reasons_to_deals.sql`.
+Files touched: `apps/api/src/routes/deals.ts` (DEAL_COLUMNS, updateDealSchema, PATCH SQL), `packages/db/migrations/442_add_outcome_reasons_to_deals.sql`.
 
 Checked `dealHealth.ts`'s lost-deal analysis (`GET /lost-analysis`, `computeLostDealAnalysis`) — it derives "objection themes" from reply classification, not from a `lost_reason` column, so this addition doesn't conflict with it. It could be a nice future enhancement to correlate `lost_reason` text with reply-classification objection themes, but that's out of this pass's scope and `lostDealAnalysis.ts` was left untouched.
 
@@ -24,9 +24,9 @@ Checked `dealHealth.ts`'s lost-deal analysis (`GET /lost-analysis`, `computeLost
 
 Ran `ls packages/db/migrations | sort -t_ -k1 -n | tail -5` immediately before writing — highest existing was `440_extend_usage_events_hunter_types.sql`. Chose:
 
-- **`441_add_outcome_reasons_to_deals.sql`** — ported/renumbered from phase2's `292` (see §1).
-- **`442_create_qualification_settings.sql`** — ported/renumbered from phase2's `293`. Same shape: one row per `(tenant_id, project_id)` (`UNIQUE(project_id)`), `min_score_to_qualify integer CHECK (0-100)`, `updated_by`, timestamps + `set_updated_at` trigger.
-- **`443_enable_rls_qualification_settings.sql`** — new, not in phase2 (phase2 never had this table RLS-protected in the same way master's other tenant tables are). Follows the exact pattern of `439_enable_rls_contact_provenance_events.sql` (`ENABLE`/`FORCE ROW LEVEL SECURITY` + tenant-isolation policy on `tenant_id = current_setting('app.current_tenant_id', true)::uuid`).
+- **`442_add_outcome_reasons_to_deals.sql`** — ported/renumbered from phase2's `292` (see §1).
+- **`443_create_qualification_settings.sql`** — ported/renumbered from phase2's `293`. Same shape: one row per `(tenant_id, project_id)` (`UNIQUE(project_id)`), `min_score_to_qualify integer CHECK (0-100)`, `updated_by`, timestamps + `set_updated_at` trigger.
+- **`444_enable_rls_qualification_settings.sql`** — new, not in phase2 (phase2 never had this table RLS-protected in the same way master's other tenant tables are). Follows the exact pattern of `439_enable_rls_contact_provenance_events.sql` (`ENABLE`/`FORCE ROW LEVEL SECURITY` + tenant-isolation policy on `tenant_id = current_setting('app.current_tenant_id', true)::uuid`).
 
 **Re-verified immediately before finishing:** `ls packages/db/migrations | sort -t_ -k1 -n | tail -8` still shows `441`/`442`/`443` as the top three with no gaps — no new migration landed on master's working tree during this session's work that would collide. **Agent B2 note:** if you also need a migration slot, re-run that `ls | sort | tail` yourself before writing — don't assume `444` is free without checking, since master's tree is still described as actively changing elsewhere.
 
@@ -77,9 +77,9 @@ Modified:
 Added:
 - `apps/api/src/routes/qualificationSettings.ts`
 - `apps/api/test/qualificationSettings.test.ts`
-- `packages/db/migrations/441_add_outcome_reasons_to_deals.sql`
-- `packages/db/migrations/442_create_qualification_settings.sql`
-- `packages/db/migrations/443_enable_rls_qualification_settings.sql`
+- `packages/db/migrations/442_add_outcome_reasons_to_deals.sql`
+- `packages/db/migrations/443_create_qualification_settings.sql`
+- `packages/db/migrations/444_enable_rls_qualification_settings.sql`
 
 ## 7. Left for Agent B2 / orchestrator
 

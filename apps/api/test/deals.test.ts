@@ -168,7 +168,7 @@ describe("PATCH /deals/:id", () => {
   });
 
   // Ported from milestone3-phase2 (packages/db/migrations/
-  // 441_add_outcome_reasons_to_deals.sql): lostReason/wonReason capture on
+  // 442_add_outcome_reasons_to_deals.sql): lostReason/wonReason capture on
   // terminal-stage transitions.
   it("rejects moving a deal to 'lost' without a lostReason", async () => {
     const app = buildApp();

@@ -10,7 +10,7 @@ import { Errors } from "../lib/httpError.js";
  *
  * Ported from the isolated milestone3-phase2 branch (adapted to master's
  * naming/conventions; see
- * packages/db/migrations/442_create_qualification_settings.sql). Plain CRUD
+ * packages/db/migrations/443_create_qualification_settings.sql). Plain CRUD
  * (really just GET + upsert, since the migration's UNIQUE(project_id) makes
  * this one row per project) over `qualification_settings`. This file is
  * config storage ONLY — the actual "does a lead's score cross this

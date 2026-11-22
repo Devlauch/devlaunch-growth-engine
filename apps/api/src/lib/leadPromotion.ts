@@ -25,7 +25,7 @@ import { assertActiveTenantMember } from "./salesPipeline.js";
  * see scoreLead.ts's header comment for the identical reasoning applied to a
  * whole function). Ported from milestone3-phase2: a project can override
  * this default via a `qualification_settings.min_score_to_qualify` row
- * (packages/db/migrations/442_create_qualification_settings.sql,
+ * (packages/db/migrations/443_create_qualification_settings.sql,
  * apps/api/src/routes/qualificationSettings.ts) — see
  * getQualificationThreshold() below. Only the THRESHOLD SOURCE is
  * configurable; the reason taxonomy (status_qualified / score_threshold /
