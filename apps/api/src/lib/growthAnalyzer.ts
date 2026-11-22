@@ -118,12 +118,12 @@ export async function discoverPages(
  * routes/competitors.ts's own crawl handler.
  */
 export async function crawlPages(urls: string[]): Promise<CrawledGrowthPage[]> {
-  const pages = await mapWithConcurrency(urls, MAX_CONCURRENCY, async (url) => {
+  const pages = await mapWithConcurrency(urls, MAX_CONCURRENCY, async (url): Promise<CrawledGrowthPage | null> => {
     const fetched = await fetchCompetitorPage(url);
     if (fetched.statusCode >= 400 || !fetched.html) return null;
     const extractedText = stripHtml(fetched.html);
     if (!extractedText) return null;
-    return { url, title: fetched.title ?? extractTitle(fetched.html), extractedText } satisfies CrawledGrowthPage;
+    return { url, title: fetched.title ?? extractTitle(fetched.html), extractedText };
   });
   return pages.filter((p): p is CrawledGrowthPage => p !== null);
 }

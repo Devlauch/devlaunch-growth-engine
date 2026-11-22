@@ -47,4 +47,13 @@ export const env = {
   // apps/worker can write the generated PDF and this process can stream it
   // back via GET .../reports/:id/download.
   reportFilesDir: process.env.REPORT_FILES_DIR ?? "./report_files",
+
+  // Sales Conversion Agent: real Calendly-style booking-provider
+  // integration (see apps/api/src/lib/bookingProvider.ts). Optional — null
+  // in any environment without a key, in which case bookingProvider.ts's
+  // NotConfiguredBookingProvider is used and every booking-provider action
+  // honestly reports { status: "not_configured" } rather than fabricating
+  // a real external booking. Same injectable/graceful-degradation
+  // convention as googlePageSpeedApiKey above.
+  calendlyApiKey: process.env.CALENDLY_API_KEY ?? null,
 };

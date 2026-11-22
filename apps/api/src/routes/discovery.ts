@@ -13,6 +13,8 @@ import {
   type ConnectorConfig,
   type DiscoveredContact as ConnectorDiscoveredContact,
 } from "@devlaunch/agent-sdk";
+import { findDecisionMakers } from "../lib/decisionMakerProvider.js";
+import { organizationsToCsv, contactsToCsv } from "../lib/prospectExport.js";
 
 /**
  * Only 'public_directory' (backed by PublicDirectoryConnector /
@@ -47,6 +49,44 @@ async function loadOrganizationOr404(req: Request, organizationId: string) {
   );
   if (r.rowCount === 0) throw Errors.notFound("Discovered organization not found");
   return r.rows[0];
+}
+
+/**
+ * Runs the decision-maker provider waterfall (decisionMakerProvider.ts) for
+ * one organization and upserts the outcome into decision_maker_cache (one
+ * row per organization — a fresh lookup replaces the prior cached one).
+ * `findDecisionMakers` itself never throws (every honest failure mode is
+ * caught internally and classified as part of the outcome), so this never
+ * aborts a caller's larger flow (e.g. a discovery-source run persisting
+ * several organizations) over a decision-maker lookup.
+ */
+async function lookupAndCacheDecisionMakers(
+  req: Request,
+  organizationId: string,
+  organizationName: string,
+  domain: string | null,
+) {
+  const outcome = await findDecisionMakers({ organizationName, domain });
+  const result = await req.tenantDb!.query(
+    `INSERT INTO decision_maker_cache (tenant_id, organization_id, provider, status, contacts, attempts, looked_up_at)
+     VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, now())
+     ON CONFLICT (organization_id) DO UPDATE SET
+       provider = EXCLUDED.provider,
+       status = EXCLUDED.status,
+       contacts = EXCLUDED.contacts,
+       attempts = EXCLUDED.attempts,
+       looked_up_at = EXCLUDED.looked_up_at
+     RETURNING *`,
+    [
+      req.tenantId,
+      organizationId,
+      outcome.provider,
+      outcome.status,
+      JSON.stringify(outcome.contacts),
+      JSON.stringify(outcome.attempts),
+    ],
+  );
+  return result.rows[0];
 }
 
 // ---------------------------------------------------------------------------
@@ -287,8 +327,8 @@ discoverySourcesRouter.post("/:id/run", async (req, res, next) => {
         const normalizedName = normalizeOrgName(org.name);
         const inserted = await req.tenantDb!.query(
           `INSERT INTO discovered_organizations
-             (tenant_id, project_id, discovery_source_id, name, domain, normalized_domain, normalized_name, source_url, raw_metadata, discovered_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10)
+             (tenant_id, project_id, discovery_source_id, name, domain, normalized_domain, normalized_name, source_url, raw_metadata, discovered_at, source_confidence)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11)
            ON CONFLICT (tenant_id, project_id, normalized_domain) WHERE normalized_domain IS NOT NULL DO NOTHING
            RETURNING *`,
           [
@@ -302,6 +342,11 @@ discoverySourcesRouter.post("/:id/run", async (req, res, next) => {
             org.sourceUrl,
             JSON.stringify(org.rawMetadata ?? {}),
             org.discoveredAt,
+            // A connector-sourced row is a direct listing from the source
+            // (the public_directory/Overpass connector today) — a stronger
+            // signal than a human-entered manual-create row (which defaults
+            // to 'unconfirmed', see POST /discovered-organizations below).
+            "verified",
           ],
         );
         if (inserted.rowCount && inserted.rowCount > 0) {
@@ -342,8 +387,8 @@ discoverySourcesRouter.post("/:id/run", async (req, res, next) => {
 
         const insertedContact = await req.tenantDb!.query(
           `INSERT INTO discovered_contacts
-             (tenant_id, organization_id, name, role_title, email, normalized_email, phone, contact_channel, verification_status, email_verification, source_url)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11)
+             (tenant_id, organization_id, name, role_title, email, normalized_email, phone, contact_channel, verification_status, email_verification, source_url, source_confidence)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12)
            ON CONFLICT (organization_id, normalized_email) WHERE normalized_email IS NOT NULL DO NOTHING
            RETURNING id`,
           [
@@ -358,6 +403,9 @@ discoverySourcesRouter.post("/:id/run", async (req, res, next) => {
             verificationStatus,
             JSON.stringify(emailVerification),
             contact.sourceUrl ?? null,
+            // Same reasoning as discovered_organizations above: a direct
+            // connector-sourced contact.
+            "verified",
           ],
         );
         if (insertedContact.rowCount && insertedContact.rowCount > 0) {
@@ -367,7 +415,19 @@ discoverySourcesRouter.post("/:id/run", async (req, res, next) => {
         }
       }
 
-      persistedOrganizations.push(orgRow);
+      // Decision-maker search (feature: Advanced Prospect Discovery). Never
+      // throws — see lookupAndCacheDecisionMakers — so one organization's
+      // lookup outcome (today, always "not_configured": no licensed
+      // decision-maker provider is wired up in this environment) can never
+      // abort the rest of this run.
+      const decisionMakerLookup = await lookupAndCacheDecisionMakers(
+        req,
+        orgRow.id as string,
+        orgRow.name as string,
+        (orgRow.domain as string | null) ?? null,
+      );
+
+      persistedOrganizations.push({ ...orgRow, decisionMakerLookup });
     }
 
     await req.tenantDb!.query(
@@ -403,6 +463,9 @@ export const discoveredOrganizationsRouter = Router({ mergeParams: true });
 discoveredOrganizationsRouter.use(requireAuth, requireTenantMembership);
 
 const organizationStatusSchema = z.enum(["new", "researched", "duplicate", "archived"]);
+/** How a discovered_organizations/discovered_contacts row's data was
+ * obtained — see 268_add_prospect_discovery_fields.sql. */
+const sourceConfidenceSchema = z.enum(["verified", "inferred", "unconfirmed"]);
 
 const createDiscoveredOrganizationSchema = z.object({
   discoverySourceId: z.string().uuid().optional(),
@@ -411,6 +474,10 @@ const createDiscoveredOrganizationSchema = z.object({
   sourceUrl: z.string().trim().min(1).max(2000),
   rawMetadata: z.record(z.string(), z.unknown()).optional(),
   status: organizationStatusSchema.optional(),
+  // A human entering this manually is asserting it's real, but it hasn't
+  // been confirmed by any connector/provider — defaults to the
+  // conservative 'unconfirmed' rather than 'verified'.
+  sourceConfidence: sourceConfidenceSchema.optional(),
 });
 
 const listDiscoveredOrganizationsQuerySchema = z.object({
@@ -465,6 +532,75 @@ discoveredOrganizationsRouter.get("/", async (req, res, next) => {
   }
 });
 
+const exportQuerySchema = z.object({
+  format: z.enum(["csv"]),
+  type: z.enum(["organizations", "contacts"]).optional().default("organizations"),
+  status: organizationStatusSchema.optional(),
+});
+
+/**
+ * GET /discovered-organizations/export?format=csv[&type=organizations|contacts][&status=...]
+ *
+ * Produces a real CSV (RFC-4180-ish — see prospectExport.ts) of this
+ * project's discovered prospects: either one row per organization
+ * (default) or, with `type=contacts`, one row per contact (joined back to
+ * its organization for context). `status` optionally restricts to one
+ * discovered_organizations.status (e.g. `status=researched` for prospects
+ * already promoted). Every column comes straight from the DB row — no
+ * synthesized/estimated fields.
+ */
+discoveredOrganizationsRouter.get("/export", async (req, res, next) => {
+  try {
+    const projectId = paramId(req, "projectId");
+    await assertProjectInTenant(req, projectId);
+    const query = exportQuerySchema.parse(req.query);
+
+    if (query.type === "contacts") {
+      const conditions = ["c.tenant_id = $1", "o.project_id = $2"];
+      const values: unknown[] = [req.tenantId, projectId];
+      if (query.status) {
+        values.push(query.status);
+        conditions.push(`o.status = $${values.length}`);
+      }
+      const result = await req.tenantDb!.query(
+        `SELECT o.name AS organization_name, o.domain AS organization_domain,
+                c.name, c.role_title, c.email, c.phone, c.contact_channel,
+                c.verification_status, c.source_confidence
+         FROM discovered_contacts c
+         JOIN discovered_organizations o ON o.id = c.organization_id
+         WHERE ${conditions.join(" AND ")}
+         ORDER BY c.created_at ASC`,
+        values,
+      );
+      const csv = contactsToCsv(result.rows);
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="discovered-contacts-${projectId}.csv"`);
+      res.status(200).send(csv);
+      return;
+    }
+
+    const conditions = ["tenant_id = $1", "project_id = $2"];
+    const values: unknown[] = [req.tenantId, projectId];
+    if (query.status) {
+      values.push(query.status);
+      conditions.push(`status = $${values.length}`);
+    }
+    const result = await req.tenantDb!.query(
+      `SELECT name, domain, status, source_confidence, discovered_at, source_url
+       FROM discovered_organizations
+       WHERE ${conditions.join(" AND ")}
+       ORDER BY discovered_at ASC`,
+      values,
+    );
+    const csv = organizationsToCsv(result.rows);
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="discovered-organizations-${projectId}.csv"`);
+    res.status(200).send(csv);
+  } catch (err) {
+    next(err);
+  }
+});
+
 /** POST /discovered-organizations */
 discoveredOrganizationsRouter.post("/", async (req, res, next) => {
   try {
@@ -494,8 +630,8 @@ discoveredOrganizationsRouter.post("/", async (req, res, next) => {
 
     const result = await req.tenantDb!.query(
       `INSERT INTO discovered_organizations
-         (tenant_id, project_id, discovery_source_id, name, domain, normalized_domain, normalized_name, source_url, raw_metadata, status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10)
+         (tenant_id, project_id, discovery_source_id, name, domain, normalized_domain, normalized_name, source_url, raw_metadata, status, source_confidence)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11)
        RETURNING *`,
       [
         req.tenantId,
@@ -508,6 +644,7 @@ discoveredOrganizationsRouter.post("/", async (req, res, next) => {
         body.sourceUrl,
         JSON.stringify(body.rawMetadata ?? {}),
         body.status ?? "new",
+        body.sourceConfidence ?? "unconfirmed",
       ],
     );
 
@@ -536,6 +673,37 @@ discoveredOrganizationsRouter.get("/:id/contacts", async (req, res, next) => {
   }
 });
 
+/**
+ * POST /discovered-organizations/:id/decision-makers
+ *
+ * Runs the decision-maker provider waterfall (decisionMakerProvider.ts)
+ * fresh against this organization and upserts the result into
+ * decision_maker_cache, returning the outcome. Useful both for re-running a
+ * lookup on demand (e.g. a dashboard "Find decision-makers" button) and for
+ * organizations created outside the discovery-source /run flow (e.g. the
+ * manual-create route above), which never got an automatic lookup.
+ */
+discoveredOrganizationsRouter.post("/:id/decision-makers", async (req, res, next) => {
+  try {
+    const projectId = paramId(req, "projectId");
+    const organizationId = paramId(req, "id");
+    await assertProjectInTenant(req, projectId);
+    const organization = await loadOrganizationOr404(req, organizationId);
+    if (organization.project_id !== projectId) throw Errors.notFound("Discovered organization not found");
+
+    const cacheRow = await lookupAndCacheDecisionMakers(
+      req,
+      organizationId,
+      organization.name as string,
+      (organization.domain as string | null) ?? null,
+    );
+
+    res.status(200).json({ decisionMakerLookup: cacheRow });
+  } catch (err) {
+    next(err);
+  }
+});
+
 const contactChannelSchema = z.enum(["role_based", "named_person", "contact_form", "phone"]);
 
 const createDiscoveredContactSchema = z
@@ -546,6 +714,7 @@ const createDiscoveredContactSchema = z
     phone: z.string().trim().max(50).optional(),
     contactChannel: contactChannelSchema,
     sourceUrl: z.string().trim().max(2000).optional(),
+    sourceConfidence: sourceConfidenceSchema.optional(),
   })
   .refine((body) => Boolean(body.email || body.phone || body.name), {
     message: "At least one of email, phone, or name is required",
@@ -584,8 +753,8 @@ discoveredOrganizationsRouter.post("/:id/contacts", async (req, res, next) => {
 
     const result = await req.tenantDb!.query(
       `INSERT INTO discovered_contacts
-         (tenant_id, organization_id, name, role_title, email, normalized_email, phone, contact_channel, verification_status, email_verification, source_url)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11)
+         (tenant_id, organization_id, name, role_title, email, normalized_email, phone, contact_channel, verification_status, email_verification, source_url, source_confidence)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12)
        RETURNING *`,
       [
         req.tenantId,
@@ -599,6 +768,7 @@ discoveredOrganizationsRouter.post("/:id/contacts", async (req, res, next) => {
         verificationStatus,
         JSON.stringify(emailVerification),
         body.sourceUrl ?? null,
+        body.sourceConfidence ?? "unconfirmed",
       ],
     );
 
