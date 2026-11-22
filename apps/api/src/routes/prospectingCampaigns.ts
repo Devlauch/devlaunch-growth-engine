@@ -143,6 +143,140 @@ prospectingCampaignsRouter.get("/:id", async (req, res, next) => {
   }
 });
 
+interface StatusCountRow {
+  status: string;
+  count: number;
+}
+
+interface ScoreBucketRow {
+  bucket: string;
+  count: number;
+}
+
+/**
+ * GET /:id/analytics
+ *
+ * Campaign-level discovery analytics, one level deeper than GET /:id's
+ * resultsSummary (which only gives flat totals): a status breakdown for
+ * this campaign's discovered_organizations, a verification-status
+ * breakdown for their discovered_contacts, and a real distribution
+ * (min/max/avg + bucketed histogram) of lead_scores among the leads this
+ * campaign's organizations were promoted into. Every number is a genuine
+ * SQL aggregate — no fabricated totals or placeholder buckets.
+ *
+ * Built directly against this tree's own schema
+ * (packages/db/migrations/323_create_prospecting_campaigns.sql), NOT the
+ * isolated milestone3-phase2 worktree's schema this endpoint was ported
+ * from: that worktree had a separate prospecting_campaign_organizations
+ * join table and budget_cents/spend_cents_to_date/target_prospect_count
+ * columns on prospecting_campaigns, none of which exist here. Here, a
+ * discovered_organizations row is tagged with the campaign that created it
+ * directly via its own prospecting_campaign_id column (added by the same
+ * migration, see discoveryRun.ts/lib/prospectingCampaigns.ts's
+ * getCampaignResultsSummary, which this endpoint's organizations/contacts
+ * counts are a finer-grained breakdown of) rather than through a join
+ * table — so there is no separate "spend" section here; that data simply
+ * isn't tracked by this schema. A promoted lead still has no direct FK back
+ * to the discovered_organizations row it came from (see discovery.ts's
+ * promote-to-lead route), so the leads join below goes through
+ * leads.custom_fields's discoveredOrganizationId, the same provenance key
+ * that route itself writes and the same join getCampaignResultsSummary
+ * already uses.
+ */
+prospectingCampaignsRouter.get("/:id/analytics", async (req, res, next) => {
+  try {
+    const projectId = paramId(req, "projectId");
+    const campaignId = paramId(req, "id");
+    await assertProjectInTenant(req, projectId);
+    const campaign = await loadCampaignOr404(req, projectId, campaignId);
+
+    const orgStatusResult = await req.tenantDb!.query<StatusCountRow>(
+      `SELECT status, count(*)::int AS count
+       FROM discovered_organizations
+       WHERE tenant_id = $1 AND project_id = $2 AND prospecting_campaign_id = $3
+       GROUP BY status`,
+      [req.tenantId, projectId, campaignId],
+    );
+    const organizationsTotal = orgStatusResult.rows.reduce((sum, r) => sum + r.count, 0);
+
+    const contactVerificationResult = await req.tenantDb!.query<StatusCountRow>(
+      `SELECT c.verification_status AS status, count(*)::int AS count
+       FROM discovered_contacts c
+       JOIN discovered_organizations o ON o.id = c.organization_id
+       WHERE o.tenant_id = $1 AND o.project_id = $2 AND o.prospecting_campaign_id = $3
+       GROUP BY c.verification_status`,
+      [req.tenantId, projectId, campaignId],
+    );
+    const contactsTotal = contactVerificationResult.rows.reduce((sum, r) => sum + r.count, 0);
+
+    const promotedLeadsResult = await req.tenantDb!.query<{ count: number }>(
+      `SELECT count(*)::int AS count
+       FROM leads l
+       JOIN discovered_organizations o
+         ON o.tenant_id = l.tenant_id AND o.id::text = l.custom_fields ->> 'discoveredOrganizationId'
+       WHERE l.tenant_id = $1 AND o.project_id = $2 AND o.prospecting_campaign_id = $3`,
+      [req.tenantId, projectId, campaignId],
+    );
+    const leadsPromoted = promotedLeadsResult.rows[0]?.count ?? 0;
+
+    const scoreStatsResult = await req.tenantDb!.query<{
+      count: number;
+      avg_score: string | null;
+      min_score: string | null;
+      max_score: string | null;
+    }>(
+      `SELECT count(*)::int AS count, avg(ls.total_score) AS avg_score,
+              min(ls.total_score) AS min_score, max(ls.total_score) AS max_score
+       FROM leads l
+       JOIN discovered_organizations o
+         ON o.tenant_id = l.tenant_id AND o.id::text = l.custom_fields ->> 'discoveredOrganizationId'
+       JOIN lead_scores ls ON ls.lead_id = l.id
+       WHERE l.tenant_id = $1 AND o.project_id = $2 AND o.prospecting_campaign_id = $3`,
+      [req.tenantId, projectId, campaignId],
+    );
+    const scoreStats = scoreStatsResult.rows[0];
+
+    const scoreDistributionResult = await req.tenantDb!.query<ScoreBucketRow>(
+      `SELECT CASE
+                WHEN ls.total_score < 25 THEN '0-25'
+                WHEN ls.total_score < 50 THEN '25-50'
+                WHEN ls.total_score < 75 THEN '50-75'
+                ELSE '75-100'
+              END AS bucket,
+              count(*)::int AS count
+       FROM leads l
+       JOIN discovered_organizations o
+         ON o.tenant_id = l.tenant_id AND o.id::text = l.custom_fields ->> 'discoveredOrganizationId'
+       JOIN lead_scores ls ON ls.lead_id = l.id
+       WHERE l.tenant_id = $1 AND o.project_id = $2 AND o.prospecting_campaign_id = $3
+       GROUP BY bucket`,
+      [req.tenantId, projectId, campaignId],
+    );
+
+    res.json({
+      prospectingCampaign: campaign,
+      organizations: {
+        total: organizationsTotal,
+        byStatus: orgStatusResult.rows,
+      },
+      contacts: {
+        total: contactsTotal,
+        byVerificationStatus: contactVerificationResult.rows,
+      },
+      leads: {
+        promotedCount: leadsPromoted,
+        scoredCount: scoreStats?.count ?? 0,
+        averageScore: scoreStats?.avg_score === null || scoreStats?.avg_score === undefined ? null : Number(scoreStats.avg_score),
+        minScore: scoreStats?.min_score === null || scoreStats?.min_score === undefined ? null : Number(scoreStats.min_score),
+        maxScore: scoreStats?.max_score === null || scoreStats?.max_score === undefined ? null : Number(scoreStats.max_score),
+        scoreDistribution: scoreDistributionResult.rows,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 /** PATCH /:id — update name/goal/icpProfileId, or manually draft<->paused. */
 prospectingCampaignsRouter.patch("/:id", async (req, res, next) => {
   try {

@@ -282,6 +282,9 @@ export interface DiscoverySource {
 
 export type ContactChannel = "role_based" | "named_person" | "contact_form" | "phone";
 export type VerificationStatus = "verified" | "unverified" | "role_based" | "risky" | "invalid";
+// How a discovered_organizations/discovered_contacts row's data was
+// obtained — see packages/db/migrations/268_add_prospect_discovery_fields.sql.
+export type SourceConfidence = "verified" | "inferred" | "unconfirmed";
 
 export interface DiscoveredContact {
   id: string;
@@ -292,6 +295,7 @@ export interface DiscoveredContact {
   phone: string | null;
   contact_channel: ContactChannel;
   verification_status: VerificationStatus;
+  source_confidence: SourceConfidence;
   created_at: string;
 }
 
@@ -307,6 +311,7 @@ export interface DiscoveredOrganization {
   source_url: string;
   discovered_at: string;
   status: DiscoveredOrganizationStatus;
+  source_confidence: SourceConfidence;
   contacts: DiscoveredContact[];
 }
 
@@ -480,6 +485,41 @@ export interface ProspectingCampaignResultsSummary {
   contactsFound: number;
   leadsCreated: number;
   leadsQualified: number;
+}
+
+// Campaign-level discovery analytics — GET .../prospecting-campaigns/:id/analytics.
+// A finer-grained breakdown than ProspectingCampaignResultsSummary's flat
+// totals above: real status/verification-status distributions plus a
+// lead_scores distribution for this campaign's promoted leads. Every number
+// is a genuine SQL aggregate from apps/api/src/routes/prospectingCampaigns.ts.
+export interface ProspectingCampaignAnalyticsStatusCount {
+  status: string;
+  count: number;
+}
+
+export interface ProspectingCampaignAnalyticsScoreBucket {
+  bucket: string;
+  count: number;
+}
+
+export interface ProspectingCampaignAnalytics {
+  prospectingCampaign: ProspectingCampaign;
+  organizations: {
+    total: number;
+    byStatus: ProspectingCampaignAnalyticsStatusCount[];
+  };
+  contacts: {
+    total: number;
+    byVerificationStatus: ProspectingCampaignAnalyticsStatusCount[];
+  };
+  leads: {
+    promotedCount: number;
+    scoredCount: number;
+    averageScore: number | null;
+    minScore: number | null;
+    maxScore: number | null;
+    scoreDistribution: ProspectingCampaignAnalyticsScoreBucket[];
+  };
 }
 
 // DevLaunch's own internal customer-acquisition workspace (not a client

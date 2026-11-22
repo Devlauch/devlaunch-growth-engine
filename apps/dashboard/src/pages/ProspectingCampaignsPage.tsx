@@ -4,12 +4,14 @@ import { Layout } from "../components/Layout";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { StatCard, StatGrid } from "../components/StatCard";
+import { Badge, discoveredOrgStatusTone, contactVerificationTone } from "../components/Badge";
 import { IconCompass, IconTarget, IconUsers, IconZap } from "../components/Icons";
 import { api, ApiError } from "../api/client";
 import type {
   DiscoverySource,
   Project,
   ProspectingCampaign,
+  ProspectingCampaignAnalytics,
   ProspectingCampaignResultsSummary,
   ProspectingCampaignSource,
 } from "../api/types";
@@ -35,6 +37,9 @@ export function ProspectingCampaignsPage() {
     resultsSummary: ProspectingCampaignResultsSummary;
   } | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
+
+  const [analytics, setAnalytics] = useState<ProspectingCampaignAnalytics | null>(null);
+  const [analyticsError, setAnalyticsError] = useState<string | null>(null);
 
   const [discoverySources, setDiscoverySources] = useState<DiscoverySource[] | null>(null);
 
@@ -89,14 +94,32 @@ export function ProspectingCampaignsPage() {
     [tenantId, projectId],
   );
 
+  const loadAnalytics = useCallback(
+    async (campaignId: string) => {
+      if (!tenantId || !projectId) return;
+      setAnalyticsError(null);
+      try {
+        const res = await api.get<ProspectingCampaignAnalytics>(
+          `/tenants/${tenantId}/projects/${projectId}/prospecting-campaigns/${campaignId}/analytics`,
+        );
+        setAnalytics(res);
+      } catch (err) {
+        setAnalyticsError(err instanceof ApiError ? err.message : "Could not load this campaign's analytics.");
+      }
+    },
+    [tenantId, projectId],
+  );
+
   const select = useCallback(
     (campaignId: string) => {
       setSelectedId(campaignId);
       setDetail(null);
+      setAnalytics(null);
       setRunError(null);
       loadDetail(campaignId);
+      loadAnalytics(campaignId);
     },
-    [loadDetail],
+    [loadDetail, loadAnalytics],
   );
 
   const createCampaign = useCallback(async () => {
@@ -140,13 +163,13 @@ export function ProspectingCampaignsPage() {
     setRunError(null);
     try {
       await api.post(`/tenants/${tenantId}/projects/${projectId}/prospecting-campaigns/${selectedId}/start-run`, {});
-      await Promise.all([load(), loadDetail(selectedId)]);
+      await Promise.all([load(), loadDetail(selectedId), loadAnalytics(selectedId)]);
     } catch (err) {
       setRunError(err instanceof ApiError ? err.message : "Could not start this campaign's run.");
     } finally {
       setRunning(false);
     }
-  }, [tenantId, projectId, selectedId, load, loadDetail]);
+  }, [tenantId, projectId, selectedId, load, loadDetail, loadAnalytics]);
 
   const selectedCampaign = campaigns?.find((c) => c.id === selectedId) ?? null;
   const attachableSources = (discoverySources ?? []).filter(
@@ -243,6 +266,79 @@ export function ProspectingCampaignsPage() {
                 </StatGrid>
               ) : (
                 <p className="muted">Loading detail...</p>
+              )}
+
+              <h3>Discovery analytics</h3>
+              <ErrorBanner message={analyticsError} />
+              {analytics ? (
+                <>
+                  <p className="muted">
+                    Organization status and contact verification breakdowns, plus the lead-score distribution among
+                    this campaign's promoted leads — every number below is a real SQL aggregate from
+                    GET .../prospecting-campaigns/:id/analytics, never estimated.
+                  </p>
+                  <StatGrid>
+                    <StatCard icon={<IconTarget />} label="Leads promoted" value={analytics.leads.promotedCount} />
+                    <StatCard icon={<IconZap />} label="Leads scored" value={analytics.leads.scoredCount} />
+                    <StatCard
+                      icon={<IconZap />}
+                      label="Average lead score"
+                      value={analytics.leads.averageScore === null ? "—" : Math.round(analytics.leads.averageScore)}
+                    />
+                  </StatGrid>
+
+                  <div style={{ display: "flex", gap: 32, flexWrap: "wrap" }}>
+                    <div>
+                      <strong>Organizations by status ({analytics.organizations.total})</strong>
+                      {analytics.organizations.byStatus.length === 0 ? (
+                        <p className="muted">No organizations tagged to this campaign yet.</p>
+                      ) : (
+                        <ul className="card-list card-list-static">
+                          {analytics.organizations.byStatus.map((row) => (
+                            <li key={row.status} className="card-list-item card-list-item-static">
+                              <Badge tone={discoveredOrgStatusTone(row.status)}>{row.status}</Badge>
+                              <span>{row.count}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+
+                    <div>
+                      <strong>Contacts by verification status ({analytics.contacts.total})</strong>
+                      {analytics.contacts.byVerificationStatus.length === 0 ? (
+                        <p className="muted">No contacts for this campaign's organizations yet.</p>
+                      ) : (
+                        <ul className="card-list card-list-static">
+                          {analytics.contacts.byVerificationStatus.map((row) => (
+                            <li key={row.status} className="card-list-item card-list-item-static">
+                              <Badge tone={contactVerificationTone(row.status)}>{row.status}</Badge>
+                              <span>{row.count}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+
+                    <div>
+                      <strong>Lead score distribution</strong>
+                      {analytics.leads.scoreDistribution.length === 0 ? (
+                        <p className="muted">No promoted leads have been scored yet.</p>
+                      ) : (
+                        <ul className="card-list card-list-static">
+                          {analytics.leads.scoreDistribution.map((row) => (
+                            <li key={row.bucket} className="card-list-item card-list-item-static">
+                              <span>{row.bucket}</span>
+                              <span>{row.count}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <p className="muted">Loading analytics...</p>
               )}
 
               <h3>Configured sources (waterfall order)</h3>

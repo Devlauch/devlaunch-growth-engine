@@ -193,6 +193,119 @@ describe("GET /prospecting-campaigns/:id", () => {
   });
 });
 
+describe("GET /prospecting-campaigns/:id/analytics", () => {
+  it("returns real status/verification/score-distribution aggregates, no spend section", async () => {
+    const app = buildApp();
+    queueResponses([
+      ...mockMembership(),
+      { rowCount: 1, rows: [{}] }, // project exists
+      {
+        rowCount: 1,
+        rows: [{ id: CAMPAIGN_1, tenant_id: TENANT_A, project_id: PROJECT_1, name: "x", status: "completed" }],
+      }, // loadCampaignOr404
+      {
+        rowCount: 2,
+        rows: [
+          { status: "new", count: 3 },
+          { status: "researched", count: 2 },
+        ],
+      }, // org status breakdown
+      {
+        rowCount: 1,
+        rows: [{ status: "verified", count: 4 }],
+      }, // contact verification breakdown
+      { rowCount: 1, rows: [{ count: 2 }] }, // promoted leads count
+      {
+        rowCount: 1,
+        rows: [{ count: 2, avg_score: "62.5", min_score: "40", max_score: "85" }],
+      }, // score stats
+      {
+        rowCount: 2,
+        rows: [
+          { bucket: "25-50", count: 1 },
+          { bucket: "75-100", count: 1 },
+        ],
+      }, // score distribution
+    ]);
+
+    const res = await request(app)
+      .get(`/api/v1/tenants/${TENANT_A}/projects/${PROJECT_1}/prospecting-campaigns/${CAMPAIGN_1}/analytics`)
+      .set("X-Dev-User-Id", USER_1);
+
+    expect(res.status).toBe(200);
+    expect(res.body.organizations).toEqual({
+      total: 5,
+      byStatus: [
+        { status: "new", count: 3 },
+        { status: "researched", count: 2 },
+      ],
+    });
+    expect(res.body.contacts).toEqual({
+      total: 4,
+      byVerificationStatus: [{ status: "verified", count: 4 }],
+    });
+    expect(res.body.leads).toEqual({
+      promotedCount: 2,
+      scoredCount: 2,
+      averageScore: 62.5,
+      minScore: 40,
+      maxScore: 85,
+      scoreDistribution: [
+        { bucket: "25-50", count: 1 },
+        { bucket: "75-100", count: 1 },
+      ],
+    });
+    expect(res.body.spend).toBeUndefined();
+  });
+
+  it("reports all-zero/null stats for a campaign with no activity yet, not fabricated numbers", async () => {
+    const app = buildApp();
+    queueResponses([
+      ...mockMembership(),
+      { rowCount: 1, rows: [{}] }, // project exists
+      {
+        rowCount: 1,
+        rows: [{ id: CAMPAIGN_1, tenant_id: TENANT_A, project_id: PROJECT_1, name: "x", status: "draft" }],
+      }, // loadCampaignOr404
+      { rowCount: 0, rows: [] }, // org status breakdown
+      { rowCount: 0, rows: [] }, // contact verification breakdown
+      { rowCount: 1, rows: [{ count: 0 }] }, // promoted leads count
+      { rowCount: 1, rows: [{ count: 0, avg_score: null, min_score: null, max_score: null }] }, // score stats
+      { rowCount: 0, rows: [] }, // score distribution
+    ]);
+
+    const res = await request(app)
+      .get(`/api/v1/tenants/${TENANT_A}/projects/${PROJECT_1}/prospecting-campaigns/${CAMPAIGN_1}/analytics`)
+      .set("X-Dev-User-Id", USER_1);
+
+    expect(res.status).toBe(200);
+    expect(res.body.organizations.total).toBe(0);
+    expect(res.body.leads).toEqual({
+      promotedCount: 0,
+      scoredCount: 0,
+      averageScore: null,
+      minScore: null,
+      maxScore: null,
+      scoreDistribution: [],
+    });
+  });
+
+  it("404s for a campaign in a different tenant/project", async () => {
+    const app = buildApp();
+    queueResponses([
+      ...mockMembership(),
+      { rowCount: 1, rows: [{}] }, // project exists
+      { rowCount: 0, rows: [] }, // loadCampaignOr404 -> not found
+    ]);
+
+    const res = await request(app)
+      .get(`/api/v1/tenants/${TENANT_A}/projects/${PROJECT_1}/prospecting-campaigns/${CAMPAIGN_1}/analytics`)
+      .set("X-Dev-User-Id", USER_1);
+
+    expect(res.status).toBe(404);
+  });
+});
+
 describe("PATCH /prospecting-campaigns/:id", () => {
   it("allows pausing a campaign", async () => {
     const app = buildApp();
