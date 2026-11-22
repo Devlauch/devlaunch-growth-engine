@@ -9,7 +9,7 @@ export type UsageEventType =
   | "hunter_discovery"
   | "hunter_verification"
   | "hunter_request_failed"
-  // Added by packages/db/migrations/442_add_google_search_call_to_usage_event_types.sql
+  // Added by packages/db/migrations/446_add_google_search_call_to_usage_event_types.sql
   // (Phase 2 reconciliation, Agent A2) — one row per real outbound call to
   // Google's Custom Search JSON API, success or failure. Apollo has no
   // equivalent usage_events type yet — see

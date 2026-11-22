@@ -52,7 +52,7 @@ const PROVIDERS = [
   // search) and Google (Custom Search company discovery) now get the same
   // real per-tenant connection path as listmonk/chatwoot/postiz/hunter —
   // encrypted credential + health-check — see apolloClient.ts/
-  // googleClient.ts and packages/db/migrations/441_add_apollo_and_google_to_integrations.sql.
+  // googleClient.ts and packages/db/migrations/445_add_apollo_and_google_to_integrations.sql.
   { key: "apollo", label: "Apollo", category: "enrichment" },
   { key: "google", label: "Google Search", category: "discovery" },
 ] as const;

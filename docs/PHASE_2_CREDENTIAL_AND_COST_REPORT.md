@@ -62,7 +62,7 @@ that gap pre-existed 295 and traces back to the never-ported migration 288, whic
 exclusion than the one I was asked to re-verify. Since Google's own connector code (owned by
 Agent A1) and this agent's cost-reporting work both need `google_search_call` to exist, and since
 my scope explicitly covers "any new migration genuinely required... or any CHECK constraint
-widening," I added `packages/db/migrations/442_add_google_search_call_to_usage_event_types.sql`
+widening," I added `packages/db/migrations/446_add_google_search_call_to_usage_event_types.sql`
 to add that one value. I did **not** add `apollo_api_call` — see §3.
 
 **No environment-application risk.** Confirmed via `git log`/worktree inspection that migration
@@ -86,7 +86,7 @@ Verified before changing anything:
 - The `integrations` table's own `provider` CHECK constraint (`024_create_integrations.sql`,
   previously widened by migrations 285/437) **also** did not allow `'apollo'`/`'google'` — so even
   with the route-level registry fixed, a real `/connect` call would have failed at the DB layer.
-  Added `packages/db/migrations/441_add_apollo_and_google_to_integrations.sql` to fix this; it was
+  Added `packages/db/migrations/445_add_apollo_and_google_to_integrations.sql` to fix this; it was
   not mentioned in the original brief but is a hard blocker without it.
 - Neither `apolloDecisionMakerProvider.ts` (Phase 2 reference) nor any `googleSearchConnector.ts`
   / `apolloClient.ts` / `googleClient.ts` existed in this worktree at the start of this work —
@@ -233,8 +233,8 @@ New/changed test files:
 - `apps/api/src/lib/usageEvents.ts` — added `google_search_call`
 - `apps/api/src/lib/providerCostReporting.ts` — rebuilt
 - `apps/api/src/routes/integrations.ts` — PROVIDERS/REAL_PROVIDERS + doc comments
-- `packages/db/migrations/441_add_apollo_and_google_to_integrations.sql` — new
-- `packages/db/migrations/442_add_google_search_call_to_usage_event_types.sql` — new
+- `packages/db/migrations/445_add_apollo_and_google_to_integrations.sql` — new
+- `packages/db/migrations/446_add_google_search_call_to_usage_event_types.sql` — new
 - `apps/api/test/providerCostReporting.test.ts` — rebuilt
 - `apps/api/test/integrations.test.ts` — extended
 - `apps/api/test/apolloClient.test.ts` — new
