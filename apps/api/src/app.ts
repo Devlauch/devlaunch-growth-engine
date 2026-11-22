@@ -65,6 +65,8 @@ import { companiesRouter } from "./routes/companies.js";
 import { contactsRouter } from "./routes/contacts.js";
 import { notesRouter } from "./routes/notes.js";
 import { leadActivityRouter } from "./routes/leadActivity.js";
+import { leadAssignmentsRouter } from "./routes/leadAssignments.js";
+import { crmTasksRouter } from "./routes/crmTasks.js";
 import { chatwootIntegrationRouter } from "./routes/chatwootIntegration.js";
 import { crmDashboardRouter } from "./routes/crmDashboard.js";
 import { dealHealthRouter } from "./routes/dealHealth.js";
@@ -264,6 +266,12 @@ export function createApp(): express.Express {
   app.use("/api/v1/tenants/:tenantId/projects/:projectId/contacts", mainCors, contactsRouter);
   app.use("/api/v1/tenants/:tenantId/projects/:projectId/notes", mainCors, notesRouter);
   app.use("/api/v1/tenants/:tenantId/projects/:projectId/leads/:leadId/activity", mainCors, leadActivityRouter);
+  app.use(
+    "/api/v1/tenants/:tenantId/projects/:projectId/leads/:leadId/assignments",
+    mainCors,
+    leadAssignmentsRouter,
+  );
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/crm-tasks", mainCors, crmTasksRouter);
   // (chatwoot/listmonk/postiz integration routers are mounted earlier,
   // before the generic /integrations registry router — see that comment.)
   app.use("/api/v1/tenants/:tenantId/projects/:projectId/crm-dashboard", mainCors, crmDashboardRouter);
