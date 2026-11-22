@@ -166,6 +166,78 @@ describe("PATCH /deals/:id", () => {
 
     expect(res.status).toBe(400);
   });
+
+  // Ported from milestone3-phase2 (packages/db/migrations/
+  // 441_add_outcome_reasons_to_deals.sql): lostReason/wonReason capture on
+  // terminal-stage transitions.
+  it("rejects moving a deal to 'lost' without a lostReason", async () => {
+    const app = buildApp();
+    queueResponses([
+      ...mockMembership(),
+      { rowCount: 1, rows: [{}] }, // project exists
+      { rowCount: 1, rows: [{ id: DEAL_1, tenant_id: TENANT_A, project_id: PROJECT_1, stage: "proposal" }] }, // loadDealOr404
+    ]);
+
+    const res = await request(app)
+      .patch(`/api/v1/tenants/${TENANT_A}/projects/${PROJECT_1}/deals/${DEAL_1}`)
+      .set("X-Dev-User-Id", USER_1)
+      .send({ stage: "lost" });
+
+    expect(res.status).toBe(400);
+    expect(queryMock.mock.calls.some(([sql]) => typeof sql === "string" && sql.includes("UPDATE deals"))).toBe(
+      false,
+    );
+  });
+
+  it("accepts moving a deal to 'lost' with a lostReason and persists it", async () => {
+    const app = buildApp();
+    queueResponses([
+      ...mockMembership(),
+      { rowCount: 1, rows: [{}] }, // project exists
+      { rowCount: 1, rows: [{ id: DEAL_1, tenant_id: TENANT_A, project_id: PROJECT_1, stage: "proposal" }] }, // loadDealOr404
+      {
+        rowCount: 1,
+        rows: [{ id: DEAL_1, tenant_id: TENANT_A, project_id: PROJECT_1, stage: "lost", lost_reason: "Budget cut" }],
+      }, // UPDATE deals
+      { rowCount: 1, rows: [] }, // audit_events
+    ]);
+
+    const res = await request(app)
+      .patch(`/api/v1/tenants/${TENANT_A}/projects/${PROJECT_1}/deals/${DEAL_1}`)
+      .set("X-Dev-User-Id", USER_1)
+      .send({ stage: "lost", lostReason: "Budget cut" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.deal.lost_reason).toBe("Budget cut");
+
+    const updateCall = queryMock.mock.calls.find(([sql]) => typeof sql === "string" && sql.includes("UPDATE deals"));
+    expect(updateCall).toBeDefined();
+    // params: [..., stageChanged(9), lostReason(10), wonReason(11)]
+    expect(updateCall![1][10]).toBe("Budget cut");
+    expect(updateCall![1][11]).toBeNull();
+  });
+
+  it("accepts moving a deal to 'won' with no wonReason (optional)", async () => {
+    const app = buildApp();
+    queueResponses([
+      ...mockMembership(),
+      { rowCount: 1, rows: [{}] }, // project exists
+      { rowCount: 1, rows: [{ id: DEAL_1, tenant_id: TENANT_A, project_id: PROJECT_1, stage: "proposal" }] }, // loadDealOr404
+      {
+        rowCount: 1,
+        rows: [{ id: DEAL_1, tenant_id: TENANT_A, project_id: PROJECT_1, stage: "won" }],
+      }, // UPDATE deals
+      { rowCount: 1, rows: [] }, // audit_events
+    ]);
+
+    const res = await request(app)
+      .patch(`/api/v1/tenants/${TENANT_A}/projects/${PROJECT_1}/deals/${DEAL_1}`)
+      .set("X-Dev-User-Id", USER_1)
+      .send({ stage: "won" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.deal.stage).toBe("won");
+  });
 });
 
 describe("GET /deals/customers", () => {

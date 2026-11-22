@@ -79,6 +79,7 @@ import { postizIntegrationRouter } from "./routes/postizIntegration.js";
 import { postizWebhooksRouter } from "./routes/postizWebhooks.js";
 import { prospectingCampaignsRouter } from "./routes/prospectingCampaigns.js";
 import { leadPromotionRouter } from "./routes/leadPromotion.js";
+import { qualificationSettingsRouter } from "./routes/qualificationSettings.js";
 import { growthAdvisorRouter } from "./routes/growthAdvisor.js";
 import { publicGrowthRouter } from "./routes/publicGrowth.js";
 import { internalGrowthRouter } from "./routes/internalGrowth.js";
@@ -216,6 +217,11 @@ export function createApp(): express.Express {
     "/api/v1/tenants/:tenantId/projects/:projectId/leads/:leadId/promote-to-crm",
     mainCors,
     leadPromotionRouter,
+  );
+  app.use(
+    "/api/v1/tenants/:tenantId/projects/:projectId/qualification-settings",
+    mainCors,
+    qualificationSettingsRouter,
   );
   app.use("/api/v1/tenants/:tenantId/projects/:projectId/learning-loop", mainCors, learningLoopRouter);
   app.use("/api/v1/tenants/:tenantId/projects/:projectId/competitors", mainCors, competitorsRouter);
