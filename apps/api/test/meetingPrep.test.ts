@@ -117,13 +117,17 @@ describe("GET /leads/:leadId/meetings/:meetingId/prep", () => {
       { rowCount: 0, rows: [] }, // enrichment
       { rowCount: 0, rows: [] }, // deal
       { rowCount: 0, rows: [] }, // recent notes
-      // getLeadActivityTimeline's own Promise.all: assignments, deals, meetings, tasks, notes, replies
+      // getLeadActivityTimeline's own lead-row read, then its Promise.all:
+      // assignments, deals, meetings, tasks, notes, replies, scores (Agent
+      // C2's Phase 2 reconciliation additions)
+      { rowCount: 0, rows: [] }, // lead row (not found here — defense in depth, never throws)
       { rowCount: 0, rows: [] },
       { rowCount: 0, rows: [] },
       { rowCount: 0, rows: [] },
       { rowCount: 0, rows: [] },
       { rowCount: 0, rows: [] },
       { rowCount: 0, rows: [] },
+      { rowCount: 0, rows: [] }, // scores
     ]);
 
     const res = await request(app).get(url()).set("X-Dev-User-Id", USER_1);
@@ -164,13 +168,16 @@ describe("GET /leads/:leadId/meetings/:meetingId/prep", () => {
       { rowCount: 1, rows: [{ id: "enrich-1", domain: "acme.com", source_confidence: "verified" }] }, // enrichment
       { rowCount: 1, rows: [{ id: "deal-1", stage: "proposal", value_amount: "1000.00" }] }, // deal
       { rowCount: 1, rows: [{ id: "note-1", body: "Great call", created_at: "2026-01-01T00:00:00Z" }] }, // notes
-      // activity timeline's internal queries, one assignment only
+      // activity timeline's own lead-row read, then its Promise.all, one
+      // assignment only (everything else empty, including scores)
+      { rowCount: 0, rows: [] }, // lead row (not found here — defense in depth, never throws)
       { rowCount: 1, rows: [{ id: "a1", assigned_user_id: "u1", assigned_by: null, assigned_at: "2026-01-01T00:00:00Z" }] },
       { rowCount: 0, rows: [] },
       { rowCount: 0, rows: [] },
       { rowCount: 0, rows: [] },
       { rowCount: 0, rows: [] },
       { rowCount: 0, rows: [] },
+      { rowCount: 0, rows: [] }, // scores
     ]);
 
     const res = await request(app).get(url()).set("X-Dev-User-Id", USER_1);

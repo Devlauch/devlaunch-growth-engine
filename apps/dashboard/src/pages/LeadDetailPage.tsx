@@ -7,7 +7,9 @@ import { StatCard, StatGrid } from "../components/StatCard";
 import { Badge, sourceBadgeTone, sourceLabel, statusTone } from "../components/Badge";
 import { IconTarget, IconUsers } from "../components/Icons";
 import { ActivityTimeline } from "../components/ActivityTimeline";
+import { WorkflowStepper } from "../components/WorkflowStepper";
 import { NotesPanel } from "../components/NotesPanel";
+import { useLeadActivity } from "../hooks/useLeadActivity";
 import { api, ApiError } from "../api/client";
 import type { Lead, Project } from "../api/types";
 
@@ -70,6 +72,16 @@ export function LeadDetailPage() {
   const [deals, setDeals] = useState<Deal[] | null>(null);
   const [assignment, setAssignment] = useState<Assignment | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+
+  // Backs the WorkflowStepper's "Scored Lead" step only — a second,
+  // independent fetch of the same GET .../activity endpoint the embedded
+  // <ActivityTimeline /> already calls via its own useLeadActivity() call.
+  // Not refactored into a single shared fetch: ActivityTimeline is
+  // documented as deliberately self-contained (fetches its own data), and
+  // this page has no other real signal for "has this lead been scored"
+  // short of adding a whole new API surface for one boolean, which the
+  // existing GET .../activity endpoint already answers.
+  const { activity } = useLeadActivity(tenantId, projectId, leadId);
 
   const [members, setMembers] = useState<Membership[] | null>(null);
   const [membersError, setMembersError] = useState<string | null>(null);
@@ -174,6 +186,11 @@ export function LeadDetailPage() {
   const openDealsCount = deals?.filter((d) => d.stage !== "won" && d.stage !== "lost").length ?? 0;
   const wonDealsCount = deals?.filter((d) => d.stage === "won").length ?? 0;
 
+  // WorkflowStepper inputs — every one a real, independently-checked signal
+  // (see WorkflowStepper.tsx's header comment), not a cascade.
+  const hasScore = activity?.some((item) => item.type === "lead_scored") ?? false;
+  const latestDeal = deals && deals.length > 0 ? deals[deals.length - 1] : null;
+
   return (
     <Layout
       crumbs={[
@@ -217,6 +234,18 @@ export function LeadDetailPage() {
                 "{lead.message}"
               </p>
             ) : null}
+          </section>
+
+          <section className="panel">
+            <h2>Workflow</h2>
+            <WorkflowStepper
+              qualified={lead.status === "qualified"}
+              hasScore={hasScore}
+              hasAssignment={assignment !== null}
+              hasDeal={Boolean(deals && deals.length > 0)}
+              dealStage={latestDeal ? STAGE_LABELS[latestDeal.stage] : null}
+              isCustomer={wonDealsCount > 0}
+            />
           </section>
 
           <StatGrid>
