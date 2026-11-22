@@ -618,6 +618,147 @@ describe("promote-to-lead", () => {
   });
 });
 
+describe("POST /discovered-organizations/bulk-promote", () => {
+  const ORG_2 = "99999999-9999-9999-9999-999999999999";
+
+  it("promotes each item independently and reports a per-item result, not all-or-nothing", async () => {
+    const app = buildApp();
+    queueResponses([
+      ...mockMembership(),
+      { rowCount: 1, rows: [{}] }, // project exists
+      // --- item 1 (ORG_1): succeeds ---
+      {
+        rowCount: 1,
+        rows: [
+          {
+            id: ORG_1,
+            tenant_id: TENANT_A,
+            project_id: PROJECT_1,
+            name: "Acme Inc",
+            domain: "acme.com",
+            source_url: "https://acme.com",
+            status: "new",
+          },
+        ],
+      }, // loadOrganizationOr404
+      { rowCount: 0, rows: [] }, // discovered_contacts lookup (none)
+      {
+        rowCount: 1,
+        rows: [{ id: "lead-1", tenant_id: TENANT_A, project_id: PROJECT_1, name: "Acme Inc", source: "discovery", status: "new" }],
+      }, // INSERT leads
+      { rowCount: 1, rows: [{ id: ORG_1, status: "researched" }] }, // UPDATE discovered_organizations
+      undefined, // INSERT audit_events
+      // --- item 2 (ORG_2): already promoted -> 409, caught per-item ---
+      {
+        rowCount: 1,
+        rows: [{ id: ORG_2, tenant_id: TENANT_A, project_id: PROJECT_1, name: "Beta LLC", status: "researched" }],
+      }, // loadOrganizationOr404
+    ]);
+
+    const res = await request(app)
+      .post(`/api/v1/tenants/${TENANT_A}/projects/${PROJECT_1}/discovered-organizations/bulk-promote`)
+      .set("X-Dev-User-Id", USER_1)
+      .send({ items: [{ organizationId: ORG_1 }, { organizationId: ORG_2 }] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.succeeded).toBe(1);
+    expect(res.body.failed).toBe(1);
+    expect(res.body.results).toEqual([
+      { organizationId: ORG_1, success: true, leadId: "lead-1" },
+      { organizationId: ORG_2, success: false, error: expect.stringContaining("already been") },
+    ]);
+  });
+
+  it("rejects an empty items array", async () => {
+    const app = buildApp();
+    queueResponses([...mockMembership(), { rowCount: 1, rows: [{}] }]);
+
+    const res = await request(app)
+      .post(`/api/v1/tenants/${TENANT_A}/projects/${PROJECT_1}/discovered-organizations/bulk-promote`)
+      .set("X-Dev-User-Id", USER_1)
+      .send({ items: [] });
+
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("GET /discovered-organizations quality filters", () => {
+  it("applies sourceConfidence/provider/minLeadScore filters as additional SQL conditions", async () => {
+    const app = buildApp();
+    queueResponses([
+      ...mockMembership(),
+      { rowCount: 1, rows: [{}] }, // project exists
+      { rowCount: 0, rows: [] }, // list query
+    ]);
+
+    const res = await request(app)
+      .get(
+        `/api/v1/tenants/${TENANT_A}/projects/${PROJECT_1}/discovered-organizations` +
+          `?sourceConfidence=verified&provider=public_directory&minLeadScore=50`,
+      )
+      .set("X-Dev-User-Id", USER_1);
+
+    expect(res.status).toBe(200);
+    const listCall = queryMock.mock.calls.find(([sql]) => typeof sql === "string" && sql.includes("FROM discovered_organizations o"));
+    expect(listCall).toBeDefined();
+    const [sql, params] = listCall as [string, unknown[]];
+    expect(sql).toContain("o.source_confidence =");
+    expect(sql).toContain("ds.connector_type =");
+    expect(sql).toContain("ls.total_score >=");
+    expect(params).toContain("verified");
+    expect(params).toContain("public_directory");
+    expect(params).toContain(50);
+  });
+
+  it("rejects an out-of-range minLeadScore", async () => {
+    const app = buildApp();
+    queueResponses([...mockMembership(), { rowCount: 1, rows: [{}] }]);
+
+    const res = await request(app)
+      .get(`/api/v1/tenants/${TENANT_A}/projects/${PROJECT_1}/discovered-organizations?minLeadScore=150`)
+      .set("X-Dev-User-Id", USER_1);
+
+    expect(res.status).toBe(400);
+  });
+});
+
+describe("GET /discovered-organizations/contacts", () => {
+  it("lists contacts across organizations filtered by verificationStatus", async () => {
+    const app = buildApp();
+    queueResponses([
+      ...mockMembership(),
+      { rowCount: 1, rows: [{}] }, // project exists
+      {
+        rowCount: 1,
+        rows: [
+          {
+            id: "contact-1",
+            organization_id: ORG_1,
+            verification_status: "risky",
+            organization_name: "Acme Inc",
+            organization_domain: "acme.com",
+            organization_status: "new",
+          },
+        ],
+      },
+    ]);
+
+    const res = await request(app)
+      .get(`/api/v1/tenants/${TENANT_A}/projects/${PROJECT_1}/discovered-organizations/contacts?verificationStatus=risky`)
+      .set("X-Dev-User-Id", USER_1);
+
+    expect(res.status).toBe(200);
+    expect(res.body.discoveredContacts).toHaveLength(1);
+    expect(res.body.discoveredContacts[0].organization_name).toBe("Acme Inc");
+
+    const listCall = queryMock.mock.calls.find(([sql]) => typeof sql === "string" && sql.includes("FROM discovered_contacts c"));
+    expect(listCall).toBeDefined();
+    const [sql, params] = listCall as [string, unknown[]];
+    expect(sql).toContain("c.verification_status =");
+    expect(params).toContain("risky");
+  });
+});
+
 describe("rankContactsForPromotion", () => {
   it("prefers a verified named person over an unverified role inbox", () => {
     const now = new Date().toISOString();
