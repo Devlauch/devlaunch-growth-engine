@@ -65,6 +65,9 @@ describe("POST /api/v1/tenants/:tenantId/memberships (invite)", () => {
       .mockResolvedValueOnce(undefined) // set_config
       .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: "m-self", role: "owner", status: "active" }] }) // self membership
       .mockResolvedValueOnce({ rowCount: 1, rows: [{ id: TARGET_USER }] }) // SELECT users WHERE email
+      .mockResolvedValueOnce({ rowCount: 0, rows: [] }) // existingMembership check (not a member yet)
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ plan: "free" }] }) // enforceQuota: SELECT plan
+      .mockResolvedValueOnce({ rowCount: 1, rows: [{ count: 0 }] }) // enforceQuota: SELECT COUNT(*) memberships
       .mockResolvedValueOnce({
         rowCount: 1,
         rows: [{ id: MEMBERSHIP_1, tenant_id: TENANT_A, user_id: TARGET_USER, role: "marketer", status: "invited", created_at: "2026-01-01" }],

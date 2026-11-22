@@ -155,3 +155,29 @@ export function IconCompass(props: SVGProps<SVGSVGElement>) {
     </Icon>
   );
 }
+
+export function IconChevronsLeft(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <path d="m11 17-5-5 5-5M18 17l-5-5 5-5" />
+    </Icon>
+  );
+}
+
+export function IconTrendUp(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <path d="m3 17 6-6 4 4 8-8" />
+      <path d="M15 7h6v6" />
+    </Icon>
+  );
+}
+
+export function IconTrendDown(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <path d="m3 7 6 6 4-4 8 8" />
+      <path d="M15 17h6v-6" />
+    </Icon>
+  );
+}

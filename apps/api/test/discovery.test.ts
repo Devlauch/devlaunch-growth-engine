@@ -228,6 +228,8 @@ describe("discovery-sources route validation", () => {
     queueResponses([
       ...mockMembership(),
       { rowCount: 1, rows: [{}] }, // project exists
+      { rowCount: 1, rows: [{ plan: "free" }] }, // enforceQuota: SELECT plan
+      { rowCount: 1, rows: [{ count: 0 }] }, // enforceQuota: SELECT COUNT(*) discovery_sources
       {
         rowCount: 1,
         rows: [

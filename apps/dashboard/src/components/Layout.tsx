@@ -125,6 +125,14 @@ export function Layout({ children, crumbs, tenantName, projectName, hasLeads = t
               >
                 Usage
               </NavLink>
+              <NavLink
+                to={`/tenants/${tenantId}/plan-usage`}
+                active={location.pathname === `/tenants/${tenantId}/plan-usage`}
+                icon={<IconChart />}
+                onClick={closeMobileNav}
+              >
+                Plan &amp; Usage
+              </NavLink>
 
               {projectId ? (
                 <>

@@ -7,6 +7,7 @@ import { enqueueAgentRun } from "../lib/queue.js";
 import type { AgentRunResult } from "@devlaunch/agent-sdk";
 import { logger } from "../lib/logger.js";
 import { recordUsageEvent } from "../lib/usageEvents.js";
+import { enforceQuota } from "../lib/quota.js";
 
 export const agentRunsRouter = Router({ mergeParams: true });
 agentRunsRouter.use(requireAuth, requireTenantMembership);
@@ -60,6 +61,13 @@ agentRunsRouter.post("/", async (req, res, next) => {
         return;
       }
     }
+
+    // Subscription-plan quota enforcement: a real COUNT(*) of today's agent
+    // runs for this tenant, checked before creating one more. Deliberately
+    // after the idempotency-key lookup above, so retrying an already-queued
+    // run via the same idempotencyKey never gets blocked by a quota that
+    // run itself already counts against.
+    await enforceQuota(req.tenantDb!, req.tenantId as string, "agentRunsPerDay");
 
     const inputWithKey = {
       ...(typeof body.input === "object" && body.input !== null ? (body.input as Record<string, unknown>) : { value: body.input }),

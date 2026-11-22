@@ -87,6 +87,8 @@ describe("POST /api/v1/tenants/:tenantId/projects/:projectId/agent-runs — real
         rowCount: 1,
         rows: [{ id: AGENT_INSTANCE_1, status: "active", agent_key: "market-research" }],
       }, // agent instance lookup
+      { rowCount: 1, rows: [{ plan: "free" }] }, // enforceQuota: SELECT plan
+      { rowCount: 1, rows: [{ count: 0 }] }, // enforceQuota: SELECT COUNT(*) agent_executions today
       { rowCount: 1, rows: [{ id: "execution-1" }] }, // insert agent_executions
       undefined, // insert usage_event (agent_run)
       undefined, // insert audit_event

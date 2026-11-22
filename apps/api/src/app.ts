@@ -46,6 +46,7 @@ import { conversionOptimizationRouter } from "./routes/conversionOptimization.js
 import { marketingIntelligenceRouter } from "./routes/marketingIntelligence.js";
 import { usageRouter } from "./routes/usage.js";
 import { apiRequestCounterMiddleware } from "./lib/usageTracking.js";
+import { planRouter } from "./routes/planUsage.js";
 
 export function createApp(): express.Express {
   const app = express();
@@ -147,6 +148,9 @@ export function createApp(): express.Express {
   app.use("/api/v1/tenants/:tenantId/approvals", mainCors, approvalsRouter);
   app.use("/api/v1/tenants/:tenantId/audit-events", mainCors, auditEventsRouter);
   app.use("/api/v1/tenants/:tenantId/usage", mainCors, usageRouter);
+  // Subscription plan + quota enforcement (data model + manual/admin-only
+  // plan changes — no real payment processing; see routes/planUsage.ts).
+  app.use("/api/v1/tenants/:tenantId/plan", mainCors, planRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

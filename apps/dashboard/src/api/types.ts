@@ -277,3 +277,25 @@ export interface Approval {
   requested_at: string;
   reviewed_at: string | null;
 }
+
+export type PlanName = "free" | "starter" | "growth" | "enterprise";
+
+export interface PlanLimits {
+  maxProjects: number | null;
+  maxAgentRunsPerDay: number | null;
+  maxTeamMembers: number | null;
+  maxDiscoverySources: number | null;
+}
+
+export type QuotaResource = "projects" | "agentRunsPerDay" | "teamMembers" | "discoverySources";
+
+export interface QuotaUsageEntry {
+  current: number;
+  limit: number | null;
+}
+
+export interface PlanUsageResponse {
+  plan: PlanName;
+  limits: PlanLimits;
+  usage: Record<QuotaResource, QuotaUsageEntry>;
+}

@@ -17,6 +17,11 @@ export const Errors = {
   notFound: (message = "Not found") => new HttpError(404, "not_found", message),
   conflict: (message = "Conflict") => new HttpError(409, "conflict", message),
   badRequest: (message = "Bad request", details?: unknown) => new HttpError(400, "bad_request", message, details),
+  // Used for subscription-plan quota enforcement (see src/lib/quota.ts).
+  // 402 "Payment Required" is the closest standard status for "you've hit
+  // your plan's limit" — note this never means a real payment was
+  // attempted/processed; there is no payment processor in this codebase.
+  paymentRequired: (message = "Plan limit reached") => new HttpError(402, "plan_limit_exceeded", message),
   tooManyRequests: (message = "Too many requests") => new HttpError(429, "rate_limited", message),
   internal: (message = "Internal server error") => new HttpError(500, "internal_error", message),
   badGateway: (message = "Upstream source failed") => new HttpError(502, "bad_gateway", message),

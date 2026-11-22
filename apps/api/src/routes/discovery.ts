@@ -3,6 +3,7 @@ import { z } from "zod";
 import { requireAuth } from "../middleware/auth.js";
 import { requireTenantMembership } from "../middleware/tenant.js";
 import { Errors } from "../lib/httpError.js";
+import { enforceQuota } from "../lib/quota.js";
 import { verifyEmail } from "../lib/emailVerification.js";
 import { normalizePhone } from "../lib/phoneVerification.js";
 import { findDuplicateOrganization, findDuplicateContact, normalizeDomain, normalizeOrgName, normalizeEmail } from "../lib/dedup.js";
@@ -114,6 +115,10 @@ discoverySourcesRouter.post("/", async (req, res, next) => {
           `csv_upload and licensed_api have no working connector wired up yet.)`,
       );
     }
+
+    // Subscription-plan quota enforcement: a real COUNT(*) of the tenant's
+    // discovery sources, checked before creating one more.
+    await enforceQuota(req.tenantDb!, req.tenantId as string, "discoverySources");
 
     const result = await req.tenantDb!.query(
       `INSERT INTO discovery_sources (tenant_id, project_id, connector_type, name, enabled, rate_limit_per_minute, terms_note, config)

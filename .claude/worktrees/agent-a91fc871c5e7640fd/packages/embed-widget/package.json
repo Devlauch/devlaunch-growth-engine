@@ -1,7 +1,0 @@
-{
-  "name": "@devlaunch/embed-widget",
-  "version": "0.1.0",
-  "private": true,
-  "description": "Paste-in vanilla-JS lead-capture widget (<script> + <form data-attributes>), no build step. See README.md.",
-  "files": ["embed.js", "README.md"]
-}

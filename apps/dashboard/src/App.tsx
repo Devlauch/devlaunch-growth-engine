@@ -11,6 +11,7 @@ import { CampaignsPage } from "./pages/CampaignsPage";
 import { CampaignDetailPage } from "./pages/CampaignDetailPage";
 import { AnalyticsPage } from "./pages/AnalyticsPage";
 import { UsagePage } from "./pages/UsagePage";
+import { PlanUsagePage } from "./pages/PlanUsagePage";
 import { IntegrationsPage } from "./pages/IntegrationsPage";
 import { DiscoveryPage } from "./pages/DiscoveryPage";
 import { ScoringPage } from "./pages/ScoringPage";
@@ -68,6 +69,14 @@ export function App() {
         element={
           <RequireAuth>
             <UsagePage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/tenants/:tenantId/plan-usage"
+        element={
+          <RequireAuth>
+            <PlanUsagePage />
           </RequireAuth>
         }
       />
