@@ -160,6 +160,17 @@ describe("dedup normalization", () => {
     expect(normalizeOrgName("  Gamma   LLC  ")).toBe("gamma");
   });
 
+  it("strips the combined 'Pty Ltd' suffix (AU/NZ/ZA) as one unit instead of leaving 'pty' dangling", () => {
+    // Before the fix, only the trailing "ltd" was recognized as a suffix,
+    // so "Acme Pty Ltd" normalized to "acme pty" — one word short of
+    // matching the same company listed elsewhere as plain "Acme", which
+    // meant findDuplicateOrganization's name-fallback match silently missed
+    // real duplicates for every AU/NZ/ZA-incorporated company.
+    expect(normalizeOrgName("Acme Pty Ltd")).toBe("acme");
+    expect(normalizeOrgName("Acme Pty. Ltd.")).toBe("acme");
+    expect(normalizeOrgName("Acme")).toBe("acme");
+  });
+
   it("normalizes emails to lowercase+trimmed", () => {
     expect(normalizeEmail("  Jane.Doe@Example.COM ")).toBe("jane.doe@example.com");
     expect(normalizeEmail(null)).toBeNull();

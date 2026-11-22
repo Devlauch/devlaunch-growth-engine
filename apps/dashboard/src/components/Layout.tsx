@@ -2,6 +2,9 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Link, useLocation, useParams } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { NotificationBell } from "./NotificationBell";
+import { api, ApiError } from "../api/client";
+import type { Tenant } from "../api/types";
+import { brandCssVars } from "../lib/theme";
 import {
   IconBell,
   IconBuilding,
@@ -92,12 +95,43 @@ export function Layout({ children, crumbs, tenantName, projectName, hasLeads = t
     }
   });
 
+  // Real per-tenant white-label theming: once inside a tenant, fetch its
+  // branding (logo_url/primary_color — packages/db/migrations/
+  // 210_add_branding_to_tenants.sql) and apply it as a live CSS
+  // custom-property override + wordmark swap, not just a settings form
+  // that does nothing. Self-contained here (rather than threaded through
+  // every page's props) so this stays an additive change to Layout.tsx.
+  const [brand, setBrand] = useState<{ logoUrl: string | null; primaryColor: string | null } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!tenantId) {
+      setBrand(null);
+      return;
+    }
+    api
+      .get<{ tenant: Tenant }>(`/tenants/${tenantId}`)
+      .then((res) => {
+        if (cancelled) return;
+        setBrand({ logoUrl: res.tenant.logo_url ?? null, primaryColor: res.tenant.primary_color ?? null });
+      })
+      .catch((err) => {
+        // Non-fatal: branding is a visual enhancement, not something that
+        // should block the rest of the shell from rendering.
+        if (!(err instanceof ApiError)) throw err;
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [tenantId]);
+
   // Close the mobile nav whenever the route changes underneath it.
   useEffect(() => {
     setMobileNavOpen(false);
   }, [location.pathname]);
 
   const closeMobileNav = () => setMobileNavOpen(false);
+  const themeVars = brandCssVars(brand?.primaryColor);
 
   function toggleCollapsed() {
     setCollapsed((prev) => {
@@ -120,14 +154,20 @@ export function Layout({ children, crumbs, tenantName, projectName, hasLeads = t
     .join(" ");
 
   return (
-    <div className="shell">
+    <div className="shell" style={themeVars as React.CSSProperties | undefined}>
       <aside className={sidebarClass}>
         <div className="sidebar-header">
           <Link to="/" className="brand" onClick={closeMobileNav}>
-            <span className="brand-mark">DL</span>
-            <span className="brand-text">
-              DevLaunch <span className="brand-accent">Growth Engine</span>
-            </span>
+            {brand?.logoUrl ? (
+              <img src={brand.logoUrl} alt={tenantName ?? "Organization logo"} className="brand-logo" />
+            ) : (
+              <>
+                <span className="brand-mark">DL</span>
+                <span className="brand-text">
+                  DevLaunch <span className="brand-accent">Growth Engine</span>
+                </span>
+              </>
+            )}
           </Link>
           <div className="sidebar-header-actions">
             <button type="button" className="sidebar-close" aria-label="Close menu" onClick={closeMobileNav}>
@@ -161,6 +201,14 @@ export function Layout({ children, crumbs, tenantName, projectName, hasLeads = t
                 onClick={closeMobileNav}
               >
                 Projects
+              </NavLink>
+              <NavLink
+                to={`/tenants/${tenantId}/branding`}
+                active={location.pathname === `/tenants/${tenantId}/branding`}
+                icon={<IconKey />}
+                onClick={closeMobileNav}
+              >
+                Branding & Profile
               </NavLink>
               <NavLink
                 to={`/tenants/${tenantId}/audit-log`}

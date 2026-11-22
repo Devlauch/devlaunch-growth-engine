@@ -78,11 +78,23 @@ function haystackContainsWord(haystack: string, word: string): boolean {
   return re.test(haystack);
 }
 
-/** True if any significant word of `phrase` appears as a whole word in `haystack`. */
+/**
+ * True if any significant word of `phrase` appears as a whole word in
+ * `haystack`. Falls back to matching the whole (short) phrase verbatim when
+ * every one of its words is under the 4-character significance threshold —
+ * without this, an ICP channel/pain-point/segment phrase that's a short,
+ * real acronym (e.g. "SEO", "PPC", "ERP", "B2B") would have ALL of its words
+ * filtered out by significantWords and could therefore never match
+ * anything, no matter what the lead's data says. A genuinely empty phrase
+ * (or one that's itself just a stopword) still scores zero, same as before.
+ */
 function phraseOverlapsHaystack(phrase: string, haystack: string): boolean {
   const words = significantWords(phrase);
-  if (words.length === 0) return false;
-  return words.some((w) => haystackContainsWord(haystack, w));
+  if (words.length > 0) return words.some((w) => haystackContainsWord(haystack, w));
+
+  const whole = phrase.trim().toLowerCase();
+  if (whole.length === 0 || STOPWORDS.has(whole)) return false;
+  return haystackContainsWord(haystack, whole);
 }
 
 function buildHaystack(lead: IcpMatchableLead): string {

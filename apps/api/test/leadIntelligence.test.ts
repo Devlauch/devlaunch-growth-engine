@@ -108,6 +108,37 @@ describe("matchLeadToIcp", () => {
 
     expect(result.score).toBeLessThanOrEqual(100);
   });
+
+  it("matches a short real-world acronym channel/pain-point (e.g. 'SEO', 'PPC') instead of silently never matching", () => {
+    // Before the fix, significantWords() filters out every word under 4
+    // characters, so a phrase made up ENTIRELY of short words (like the
+    // acronym "SEO") ended up with zero significant words and
+    // phraseOverlapsHaystack returned false unconditionally — meaning an
+    // ICP channel/pain-point of "SEO" or "PPC" could never score a match no
+    // matter what the lead's data said.
+    const lead = {
+      custom_fields: { note: "They specifically asked about our SEO package and PPC spend." },
+    };
+    const icpProfile = {
+      pain_points: ["SEO"],
+      channels: ["PPC"],
+    };
+
+    const result = matchLeadToIcp(lead, icpProfile);
+
+    expect(result.score).toBeGreaterThan(0);
+    expect(result.reasons.some((r) => r.includes("SEO"))).toBe(true);
+    expect(result.reasons.some((r) => r.includes("PPC"))).toBe(true);
+  });
+
+  it("still scores 0 for a short acronym that doesn't actually appear anywhere in the lead's data", () => {
+    const lead = { custom_fields: { note: "Just a generic inquiry." } };
+    const icpProfile = { pain_points: ["SEO"] };
+
+    const result = matchLeadToIcp(lead, icpProfile);
+
+    expect(result.score).toBe(0);
+  });
 });
 
 // ---------------------------------------------------------------------------

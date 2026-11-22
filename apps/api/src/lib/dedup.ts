@@ -16,6 +16,18 @@ const COMMON_ORG_SUFFIXES = [
   "pvt. ltd.",
   "pvt ltd.",
   "pvt. ltd",
+  // Australia/NZ/South Africa's equivalent of "Pvt Ltd" — previously
+  // missing, which meant "Acme Pty Ltd" only had its trailing "ltd"
+  // stripped (by the entry below) and normalized to "acme pty" instead of
+  // "acme", so it silently failed to dedup against the same company listed
+  // elsewhere as plain "Acme". Listed ahead of the bare "ltd"/"limited"
+  // entries so the combined suffix is recognized as one unit.
+  "pty ltd",
+  "pty. ltd.",
+  "pty ltd.",
+  "pty. ltd",
+  "pty limited",
+  "proprietary limited",
   "limited",
   "ltd",
   "llc",

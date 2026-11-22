@@ -1620,3 +1620,10 @@ input[type="checkbox"] {
   color: var(--muted);
   margin-top: 4px;
 }
+
+.brand-logo {
+  max-width: 160px;
+  max-height: 36px;
+  object-fit: contain;
+  display: block;
+}

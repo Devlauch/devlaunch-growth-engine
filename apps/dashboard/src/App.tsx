@@ -14,6 +14,7 @@ import { ReportsPage } from "./pages/ReportsPage";
 import { UsagePage } from "./pages/UsagePage";
 import { PlanUsagePage } from "./pages/PlanUsagePage";
 import { AuditLogPage } from "./pages/AuditLogPage";
+import { BrandingPage } from "./pages/BrandingPage";
 import { IntegrationsPage } from "./pages/IntegrationsPage";
 import { DiscoveryPage } from "./pages/DiscoveryPage";
 import { ScoringPage } from "./pages/ScoringPage";
@@ -88,6 +89,14 @@ export function App() {
         element={
           <RequireAuth>
             <AuditLogPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/tenants/:tenantId/branding"
+        element={
+          <RequireAuth>
+            <BrandingPage />
           </RequireAuth>
         }
       />

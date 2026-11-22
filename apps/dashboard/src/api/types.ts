@@ -22,8 +22,28 @@ export interface Tenant {
   slug: string;
   name: string;
   industry: string | null;
+  // Client onboarding + white-label branding (packages/db/migrations/
+  // 210_add_branding_to_tenants.sql). `subdomain` is a plain requested
+  // reference string only — no DNS/TLS/custom-domain is ever provisioned
+  // for it anywhere in this codebase; see BrandingPage.tsx.
+  goals?: string | null;
+  logo_url?: string | null;
+  primary_color?: string | null;
+  subdomain?: string | null;
   status: string;
   role?: string;
+}
+
+export interface OnboardingChecklistItem {
+  key: string;
+  label: string;
+  done: boolean;
+}
+
+export interface OnboardingCompleteness {
+  checklist: OnboardingChecklistItem[];
+  completedCount: number;
+  totalCount: number;
 }
 
 export interface Project {
