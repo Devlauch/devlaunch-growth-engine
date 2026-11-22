@@ -10,6 +10,7 @@ import {
   findOrCreateContactForLead,
   assignLeadToUser,
   autoAssignLeadRoundRobin,
+  getQualificationThreshold,
   type LeadRow,
   type LeadScoreRow,
 } from "../lib/leadPromotion.js";
@@ -89,7 +90,8 @@ leadPromotionRouter.post("/", async (req, res, next) => {
       `SELECT total_score FROM lead_scores WHERE lead_id = $1 AND tenant_id = $2 AND project_id = $3`,
       [leadId, req.tenantId, projectId],
     );
-    const qualification = evaluateQualification(lead, scoreResult.rows[0] ?? null);
+    const threshold = await getQualificationThreshold(req.tenantDb!, req.tenantId!, projectId);
+    const qualification = evaluateQualification(lead, scoreResult.rows[0] ?? null, threshold);
     requireQualifiedOrOverride(qualification, body.override);
 
     const companyResult = await findOrCreateCompanyForLead(req.tenantDb!, req.tenantId!, projectId, req.userId!, lead);
