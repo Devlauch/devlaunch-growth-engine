@@ -21,6 +21,37 @@ const TYPE_LABELS: Record<ActivityItemType, string> = {
   meeting: "Meeting",
   task: "Task",
   note: "Note",
+  // "reply" existed on ActivityItemType before this pass but was missing
+  // here — a pre-existing gap, fixed in passing since every other label is
+  // being touched anyway for the Phase 2 reconciliation additions below.
+  reply: "Reply",
+  // Ported from Phase 2 (Agent C2) — see apps/api/src/lib/
+  // activityTimeline.ts's header comment for exactly which columns back
+  // each of these.
+  lead_created: "Lead created",
+  discovery_sourced: "Discovery",
+  lead_scored: "Scored",
+  deal_created: "Deal created",
+  crm_task_created: "Task created",
+};
+
+// Reuses the existing tone-based badge classes (badge-neutral/info/
+// success/warn/danger, see styles.css) instead of inventing a second,
+// parallel per-type color scheme — the badge className below was
+// previously `badge-${item.type}`, for which no CSS rule has ever existed
+// on this tree (so every item rendered an uncolored, unstyled badge).
+const TYPE_TONE: Record<ActivityItemType, "neutral" | "info" | "success" | "warn" | "danger"> = {
+  assignment: "info",
+  stage_change: "warn",
+  meeting: "neutral",
+  task: "neutral",
+  note: "neutral",
+  reply: "info",
+  lead_created: "neutral",
+  discovery_sourced: "info",
+  lead_scored: "success",
+  deal_created: "warn",
+  crm_task_created: "neutral",
 };
 
 function formatTimestamp(ts: string): string {
@@ -43,7 +74,8 @@ export function ActivityTimeline({
     <section className="panel">
       <h2>Activity</h2>
       <p className="muted">
-        Every assignment, stage change, meeting, task and note for this lead, newest first. Deal stage changes show
+        Every assignment, stage change, meeting, task, note and reply for this lead, newest first — plus (where
+        applicable) its creation, discovery provenance, score and deal/task creation events. Deal stage changes show
         only the most recent transition — there is no stage-history table, so earlier transitions aren't retained.
       </p>
       <ErrorBanner message={error} />
@@ -57,7 +89,7 @@ export function ActivityTimeline({
           {activity.map((item: ActivityItem) => (
             <li key={`${item.type}-${item.sourceId}`} className={`activity-item activity-item-${item.type}`}>
               <div className="activity-item-header">
-                <span className={`badge badge-${item.type}`}>{TYPE_LABELS[item.type]}</span>
+                <span className={`badge badge-${TYPE_TONE[item.type]}`}>{TYPE_LABELS[item.type]}</span>
                 <time dateTime={item.timestamp}>{formatTimestamp(item.timestamp)}</time>
               </div>
               <p className="activity-item-summary">{item.summary}</p>
