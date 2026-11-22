@@ -11,11 +11,15 @@ import { logger } from "../lib/logger.js";
  * Mounted at /api/v1/tenants/:tenantId/projects/:projectId/integrations
  *
  * Milestone 2 upgrade: this registry now supports a REAL per-tenant
- * connection for exactly 3 providers — listmonk, chatwoot, postiz — per
- * docs/INTEGRATION_STATUS.md. twenty/mautic/posthog/formbricks remain
- * registry-only placeholders (unchanged — no real integration exists for
- * them in this phase; `connect` still works for them but there is nothing
- * real on the other end).
+ * connection for listmonk, chatwoot, postiz, and hunter — per
+ * docs/INTEGRATION_STATUS.md. Phase 2 reconciliation (Agent A2) adds apollo
+ * and google to that same real-connection set (see REAL_PROVIDERS below) —
+ * unifying their credential resolution through this same
+ * encrypted-at-rest path instead of Phase 2's original bare `env` lookup.
+ * twenty/mautic/posthog/formbricks remain registry-only placeholders
+ * (unchanged — no real integration exists for them in this phase;
+ * `connect` still works for them but there is nothing real on the other
+ * end).
  *
  * "Real" here means: a tenant's own API key/token is encrypted at rest
  * (apps/api/src/lib/credentialEncryption.ts, AES-256-GCM, keyed by
@@ -44,12 +48,19 @@ const PROVIDERS = [
   { key: "formbricks", label: "Formbricks", category: "feedback" },
   { key: "chatwoot", label: "Chatwoot", category: "chat" },
   { key: "hunter", label: "Hunter", category: "enrichment" },
+  // Phase 2 reconciliation (Agent A2): Apollo (decision-maker/people
+  // search) and Google (Custom Search company discovery) now get the same
+  // real per-tenant connection path as listmonk/chatwoot/postiz/hunter —
+  // encrypted credential + health-check — see apolloClient.ts/
+  // googleClient.ts and packages/db/migrations/441_add_apollo_and_google_to_integrations.sql.
+  { key: "apollo", label: "Apollo", category: "enrichment" },
+  { key: "google", label: "Google Search", category: "discovery" },
 ] as const;
 
 // The providers that actually build a real connection (health-check calls
 // a real external API). Everything else keeps the old registry-only
 // ("pending_setup" label, never 'connected') behavior.
-const REAL_PROVIDERS = new Set(["listmonk", "chatwoot", "postiz", "hunter"]);
+const REAL_PROVIDERS = new Set(["listmonk", "chatwoot", "postiz", "hunter", "apollo", "google"]);
 
 type ProviderKey = (typeof PROVIDERS)[number]["key"];
 const PROVIDER_KEYS = PROVIDERS.map((p) => p.key) as [ProviderKey, ...ProviderKey[]];
@@ -125,7 +136,7 @@ integrationsRouter.get("/", async (req, res, next) => {
 
     res.json({
       integrations,
-      note: "listmonk, chatwoot, and postiz support a real per-tenant connection (encrypted credential + health-check); every other provider remains registry-only in this phase.",
+      note: "listmonk, chatwoot, postiz, hunter, apollo, and google support a real per-tenant connection (encrypted credential + health-check); every other provider remains registry-only in this phase.",
     });
   } catch (err) {
     next(err);
