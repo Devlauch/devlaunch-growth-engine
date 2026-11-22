@@ -4,6 +4,7 @@ import { requireAuth } from "../middleware/auth.js";
 import { requireTenantMembership } from "../middleware/tenant.js";
 import { requireRole, GTM_ROLES } from "../middleware/rbac.js";
 import { Errors } from "../lib/httpError.js";
+import { notify } from "../lib/notify.js";
 
 export const approvalsRouter = Router({ mergeParams: true });
 approvalsRouter.use(requireAuth, requireTenantMembership);
@@ -55,7 +56,8 @@ approvalsRouter.post("/:approvalId/decision", requireRole(...GTM_ROLES), async (
       `UPDATE approvals
        SET status = $3, reviewed_by = $4, decision_notes = $5, reviewed_at = now()
        WHERE id = $1 AND tenant_id = $2 AND status = 'pending'
-       RETURNING id, agent_execution_id, campaign_id, status, reviewed_by, decision_notes, reviewed_at`,
+       RETURNING id, agent_execution_id, campaign_id, status, requested_by, reviewed_by, decision_notes, reviewed_at,
+         (SELECT c.project_id FROM campaigns c WHERE c.id = campaign_id) AS campaign_project_id`,
       [approvalId, req.tenantId, body.decision, req.userId, body.notes ?? null],
     );
 
@@ -84,6 +86,26 @@ approvalsRouter.post("/:approvalId/decision", requireRole(...GTM_ROLES), async (
        VALUES ($1, 'user', $2, 'approval.decided', 'approval', $3, $4::jsonb)`,
       [req.tenantId, req.userId, approvalId, JSON.stringify({ decision: body.decision, campaignId: approval.campaign_id ?? undefined })],
     );
+
+    // Real in-app notification: tell the original requester their approval
+    // was decided — never email/WhatsApp (see src/lib/notify.ts). Skip
+    // notifying someone of their own decision on their own request.
+    if (approval.requested_by && approval.requested_by !== req.userId) {
+      await notify({
+        client: req.tenantDb!,
+        tenantId: req.tenantId!,
+        userId: approval.requested_by,
+        type: "approval.decided",
+        title: body.decision === "approved" ? "Your request was approved" : "Your request was rejected",
+        body: approval.campaign_id
+          ? `Your campaign approval request was ${body.decision}.`
+          : `Your approval request was ${body.decision}.`,
+        linkUrl:
+          approval.campaign_id && approval.campaign_project_id
+            ? `/tenants/${req.tenantId}/projects/${approval.campaign_project_id}/campaigns/${approval.campaign_id}`
+            : null,
+      });
+    }
 
     res.json({ approval });
   } catch (err) {

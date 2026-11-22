@@ -13,6 +13,7 @@ import { AnalyticsPage } from "./pages/AnalyticsPage";
 import { ReportsPage } from "./pages/ReportsPage";
 import { UsagePage } from "./pages/UsagePage";
 import { PlanUsagePage } from "./pages/PlanUsagePage";
+import { AuditLogPage } from "./pages/AuditLogPage";
 import { IntegrationsPage } from "./pages/IntegrationsPage";
 import { DiscoveryPage } from "./pages/DiscoveryPage";
 import { ScoringPage } from "./pages/ScoringPage";
@@ -79,6 +80,14 @@ export function App() {
         element={
           <RequireAuth>
             <PlanUsagePage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/tenants/:tenantId/audit-log"
+        element={
+          <RequireAuth>
+            <AuditLogPage />
           </RequireAuth>
         }
       />

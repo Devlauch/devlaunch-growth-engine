@@ -3,6 +3,7 @@ import { z } from "zod";
 import { requireAuth } from "../middleware/auth.js";
 import { requireTenantMembership } from "../middleware/tenant.js";
 import { Errors } from "../lib/httpError.js";
+import { notifyTenantOwnersAndAdmins } from "../lib/notify.js";
 
 /**
  * Mounted at /api/v1/tenants/:tenantId/projects/:projectId/campaigns
@@ -236,6 +237,19 @@ campaignsRouter.post("/:campaignId/submit-for-approval", async (req, res, next) 
        VALUES ($1, 'user', $2, 'campaign.submitted_for_approval', 'campaign', $3, $4::jsonb)`,
       [req.tenantId, req.userId, campaignId, JSON.stringify({ approvalId: approval.rows[0].id })],
     );
+
+    // Real in-app notification: whoever can approve (owners/admins) needs
+    // to know a campaign is now waiting on them — never email/WhatsApp
+    // (see src/lib/notify.ts).
+    await notifyTenantOwnersAndAdmins({
+      client: req.tenantDb!,
+      tenantId: req.tenantId!,
+      excludeUserId: req.userId,
+      type: "campaign.submitted_for_approval",
+      title: "Campaign awaiting your approval",
+      body: `Campaign "${existing.name}" was submitted for approval.`,
+      linkUrl: `/tenants/${req.tenantId}/projects/${projectId}/campaigns/${campaignId}`,
+    });
 
     res.status(201).json({ campaign: updated.rows[0], approval: approval.rows[0] });
   } catch (err) {

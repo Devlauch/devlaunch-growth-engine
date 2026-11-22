@@ -1,6 +1,7 @@
 import type { PoolClient } from "pg";
 import { z } from "zod";
 import { recordUsageEvent } from "./usageEvents.js";
+import { notifyTenantOwnersAndAdmins } from "./notify.js";
 
 /**
  * The single lead-ingestion path. Used by BOTH:
@@ -109,6 +110,19 @@ export async function ingestLead(params: IngestLeadParams): Promise<IngestedLead
     projectId,
     eventType: "lead_captured",
     metadata: { source },
+  });
+
+  // Real in-app notification: tell the tenant's owners/admins a new lead
+  // came in so it gets reviewed — never email/WhatsApp (no provider
+  // credentials exist in this environment; see src/lib/notify.ts).
+  const leadLabel = input.name || input.email || "A new lead";
+  await notifyTenantOwnersAndAdmins({
+    client,
+    tenantId,
+    type: "lead.captured",
+    title: "New lead captured",
+    body: `${leadLabel} was captured via ${source === "public_widget" ? "your website widget" : source}.`,
+    linkUrl: `/tenants/${tenantId}/projects/${projectId}#leads-section`,
   });
 
   return { id: row.id, createdAt: row.created_at };

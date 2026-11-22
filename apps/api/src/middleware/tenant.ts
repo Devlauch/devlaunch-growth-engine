@@ -53,7 +53,19 @@ export async function requireTenantMembership(req: Request, res: Response, next:
 
   try {
     await client.query("BEGIN");
-    await client.query("SELECT set_config('app.current_tenant_id', $1, true)", [tenantId]);
+    // Sets BOTH session variables in one round trip (and one mocked query
+    // call, for the existing test suite's mockMembership() helpers):
+    // app.current_tenant_id (the long-standing tenant-isolation variable)
+    // and app.current_user_id (the authenticated caller — req.userId only,
+    // never a client-supplied value). The latter was previously set only
+    // by withUserContext() for the narrow self-lookup RLS policies added in
+    // 018_extend_memberships_rls_self_lookup.sql; it's now set here too so
+    // the same pattern can back the notifications table's per-user RLS
+    // policy (packages/db/migrations/251_enable_rls_notifications.sql).
+    await client.query(
+      "SELECT set_config('app.current_tenant_id', $1, true), set_config('app.current_user_id', $2, true)",
+      [tenantId, req.userId],
+    );
 
     const membershipResult = await client.query(
       `SELECT id, role, status FROM memberships WHERE tenant_id = $1 AND user_id = $2 AND status = 'active'`,

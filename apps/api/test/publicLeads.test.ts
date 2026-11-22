@@ -92,6 +92,7 @@ describe("POST /api/v1/public/projects/:projectPublicKey/leads", () => {
       .mockResolvedValueOnce({ rows: [{ id: "lead-1", created_at: "2026-01-01T00:00:00.000Z" }] }) // insert lead
       .mockResolvedValueOnce(undefined) // insert audit_event
       .mockResolvedValueOnce(undefined) // insert usage_event (lead_captured)
+      .mockResolvedValueOnce({ rowCount: 0, rows: [] }) // notifyTenantOwnersAndAdmins: no owners/admins to notify in this test
       .mockResolvedValueOnce(undefined); // COMMIT
 
     const app = buildApp();
@@ -133,6 +134,7 @@ describe("POST /api/v1/public/projects/:projectPublicKey/leads", () => {
       .mockResolvedValueOnce({ rows: [{ id: "lead-1", created_at: "2026-01-01T00:00:00.000Z" }] }) // insert lead
       .mockResolvedValueOnce(undefined) // insert audit_event
       .mockResolvedValueOnce(undefined) // insert usage_event (lead_captured)
+      .mockResolvedValueOnce({ rowCount: 0, rows: [] }) // notifyTenantOwnersAndAdmins: no owners/admins to notify in this test
       .mockResolvedValueOnce(undefined); // COMMIT
 
     const app = buildApp();

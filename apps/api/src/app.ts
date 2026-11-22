@@ -18,6 +18,7 @@ import { agentRunsRouter } from "./routes/agentRuns.js";
 import { projectAgentExecutionsRouter, tenantAgentExecutionRouter } from "./routes/agentExecutions.js";
 import { approvalsRouter } from "./routes/approvals.js";
 import { auditEventsRouter } from "./routes/auditEvents.js";
+import { notificationsRouter } from "./routes/notifications.js";
 import { publicLeadsRouter } from "./routes/publicLeads.js";
 import { leadsRouter } from "./routes/leads.js";
 import { campaignsRouter } from "./routes/campaigns.js";
@@ -150,6 +151,7 @@ export function createApp(): express.Express {
   app.use("/api/v1/tenants/:tenantId/agent-executions", mainCors, tenantAgentExecutionRouter);
   app.use("/api/v1/tenants/:tenantId/approvals", mainCors, approvalsRouter);
   app.use("/api/v1/tenants/:tenantId/audit-events", mainCors, auditEventsRouter);
+  app.use("/api/v1/tenants/:tenantId/notifications", mainCors, notificationsRouter);
   app.use("/api/v1/tenants/:tenantId/usage", mainCors, usageRouter);
   // Subscription plan + quota enforcement (data model + manual/admin-only
   // plan changes — no real payment processing; see routes/planUsage.ts).

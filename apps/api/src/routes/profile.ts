@@ -73,6 +73,12 @@ profileRouter.put("/", async (req, res, next) => {
       ],
     );
 
+    await req.tenantDb!.query(
+      `INSERT INTO audit_events (tenant_id, actor_type, actor_user_id, action, entity_type, entity_id, metadata)
+       VALUES ($1, 'user', $2, 'project_profile.updated', 'project_profile', $3, $4::jsonb)`,
+      [req.tenantId, req.userId, result.rows[0].id, JSON.stringify(body)],
+    );
+
     res.json({ profile: result.rows[0] });
   } catch (err) {
     next(err);

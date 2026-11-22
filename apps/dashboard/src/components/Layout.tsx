@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, useLocation, useParams } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
+import { NotificationBell } from "./NotificationBell";
 import {
   IconBell,
   IconBuilding,
@@ -160,6 +161,14 @@ export function Layout({ children, crumbs, tenantName, projectName, hasLeads = t
                 onClick={closeMobileNav}
               >
                 Projects
+              </NavLink>
+              <NavLink
+                to={`/tenants/${tenantId}/audit-log`}
+                active={location.pathname === `/tenants/${tenantId}/audit-log`}
+                icon={<IconInbox />}
+                onClick={closeMobileNav}
+              >
+                Audit Log
               </NavLink>
               <NavLink
                 to={`/tenants/${tenantId}/usage`}
@@ -385,9 +394,7 @@ export function Layout({ children, crumbs, tenantName, projectName, hasLeads = t
           </label>
 
           <div className="header-actions">
-            <span className="header-bell" title="Notifications" aria-hidden="true">
-              <IconBell width={18} height={18} />
-            </span>
+            {tenantId ? <NotificationBell tenantId={tenantId} /> : null}
             {user ? (
               <span className="header-avatar" title={user.fullName ?? user.email}>
                 {initialsFor(user.fullName, user.email)}

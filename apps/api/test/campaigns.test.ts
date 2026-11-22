@@ -125,6 +125,7 @@ describe("campaign status transitions", () => {
       { rowCount: 1, rows: [{ id: CAMPAIGN_1, status: "pending_approval" }] }, // UPDATE campaigns ... status = pending_approval
       { rowCount: 1, rows: [{ id: APPROVAL_1, campaign_id: CAMPAIGN_1, status: "pending", requested_by: USER_1, requested_at: "2026-01-01" }] }, // INSERT approvals
       undefined, // audit insert
+      { rowCount: 0, rows: [] }, // notifyTenantOwnersAndAdmins: memberships lookup
     ]);
 
     const res = await request(app)
