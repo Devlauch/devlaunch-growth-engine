@@ -1,0 +1,24 @@
+{
+  "name": "devlaunch-growth-engine",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DevLaunch Growth Engine - Phase 1 monorepo (apps/api, apps/worker, apps/dashboard, packages/db, packages/agent-sdk, packages/embed-widget).",
+  "engines": {
+    "node": ">=22",
+    "pnpm": ">=9"
+  },
+  "packageManager": "pnpm@9.15.2",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace=@devlaunch/agent-sdk && npm run build --workspace=@devlaunch/api && npm run build --workspace=@devlaunch/worker",
+    "dev:api": "npm run dev --workspace=@devlaunch/api",
+    "dev:worker": "npm run dev --workspace=@devlaunch/worker",
+    "test": "npm run test --workspace=@devlaunch/agent-sdk --if-present && npm run test --workspace=@devlaunch/worker --if-present && npm run test --workspace=@devlaunch/api --if-present",
+    "migrate:up": "npm run migrate:up --workspace=@devlaunch/db",
+    "db:seed": "npm run db:seed --workspace=@devlaunch/db"
+  },
+  "devDependencies": {}
+}

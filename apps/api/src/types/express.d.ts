@@ -8,7 +8,7 @@ declare global {
       userEmail?: string;
       /** Set by src/middleware/tenant.ts after membership is verified. */
       tenantId?: string;
-      membershipRole?: "owner" | "admin" | "member" | "viewer";
+      membershipRole?: "owner" | "admin" | "marketer" | "sales" | "analyst" | "viewer" | "member";
       /** A pg client with app.current_tenant_id set (tx-local) for this request's tenant. */
       tenantDb?: pg.PoolClient;
     }

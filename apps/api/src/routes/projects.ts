@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import { z } from "zod";
 import { requireAuth } from "../middleware/auth.js";
 import { requireTenantMembership } from "../middleware/tenant.js";
+import { requireRole, ADMIN_ROLES } from "../middleware/rbac.js";
 import { Errors } from "../lib/httpError.js";
 
 export const projectsRouter = Router({ mergeParams: true });
@@ -147,8 +148,14 @@ projectsRouter.get("/:projectId/utm-sample-leads", async (req, res, next) => {
   }
 });
 
-/** PATCH /api/v1/tenants/:tenantId/projects/:projectId */
-projectsRouter.patch("/:projectId", async (req, res, next) => {
+/**
+ * PATCH /api/v1/tenants/:tenantId/projects/:projectId
+ *
+ * Includes the project's public widget exposure settings
+ * (publicWidgetEnabled/allowedOrigins) and other status/settings fields —
+ * owner/admin only, since this controls a tenant-wide public surface.
+ */
+projectsRouter.patch("/:projectId", requireRole(...ADMIN_ROLES), async (req, res, next) => {
   try {
     const projectId = z.string().uuid().parse(req.params.projectId);
     const body = patchProjectSchema.parse(req.body);

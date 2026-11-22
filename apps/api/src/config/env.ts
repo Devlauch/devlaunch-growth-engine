@@ -32,4 +32,12 @@ export const env = {
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean),
+
+  // Technical SEO agent (Phase 2 item 3): Core Web Vitals via the free
+  // Google PageSpeed Insights API. Optional — null in any environment
+  // without a key, in which case apps/api/src/lib/coreWebVitals.ts
+  // honestly reports { status: "not_configured" } rather than fabricating
+  // numbers. See apps/api/src/lib/dnsVerification.ts for the same
+  // injectable/graceful-degradation convention.
+  googlePageSpeedApiKey: process.env.GOOGLE_PAGESPEED_API_KEY ?? null,
 };

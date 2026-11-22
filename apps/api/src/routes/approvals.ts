@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { requireAuth } from "../middleware/auth.js";
 import { requireTenantMembership } from "../middleware/tenant.js";
+import { requireRole, GTM_ROLES } from "../middleware/rbac.js";
 import { Errors } from "../lib/httpError.js";
 
 export const approvalsRouter = Router({ mergeParams: true });
@@ -38,8 +39,14 @@ approvalsRouter.get("/", async (req, res, next) => {
   }
 });
 
-/** POST /api/v1/tenants/:tenantId/approvals/:approvalId/decision */
-approvalsRouter.post("/:approvalId/decision", async (req, res, next) => {
+/**
+ * POST /api/v1/tenants/:tenantId/approvals/:approvalId/decision
+ *
+ * Approving/rejecting is a go-to-market sign-off action, so it is
+ * restricted to owner/admin/marketer — analyst/sales/viewer (and the
+ * legacy 'member') can see the queue (GET above) but may not decide it.
+ */
+approvalsRouter.post("/:approvalId/decision", requireRole(...GTM_ROLES), async (req, res, next) => {
   try {
     const approvalId = z.string().uuid().parse(req.params.approvalId);
     const body = decisionSchema.parse(req.body);
