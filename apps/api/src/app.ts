@@ -51,12 +51,53 @@ import { planRouter } from "./routes/planUsage.js";
 import { reportsRouter } from "./routes/reports.js";
 import { reportSchedulesRouter } from "./routes/reportSchedules.js";
 import { workflowsRouter } from "./routes/workflows.js";
+import { growthAnalyzerRouter } from "./routes/growthAnalyzer.js";
+import { landingPagesRouter } from "./routes/landingPages.js";
+import { publicLandingPagesRouter } from "./routes/publicLandingPages.js";
+import { chatbotAdminRouter } from "./routes/chatbotAdmin.js";
+import { publicChatbotRouter } from "./routes/publicChatbot.js";
+import { dealsRouter } from "./routes/deals.js";
+import { meetingsRouter } from "./routes/meetings.js";
+import { growthAnalyticsRouter } from "./routes/growthAnalytics.js";
+import { campaignAttributionRouter } from "./routes/campaignAttribution.js";
+import { chatwootWebhooksRouter } from "./routes/chatwootWebhooks.js";
+import { companiesRouter } from "./routes/companies.js";
+import { contactsRouter } from "./routes/contacts.js";
+import { notesRouter } from "./routes/notes.js";
+import { leadActivityRouter } from "./routes/leadActivity.js";
+import { chatwootIntegrationRouter } from "./routes/chatwootIntegration.js";
+import { crmDashboardRouter } from "./routes/crmDashboard.js";
+import { dealHealthRouter } from "./routes/dealHealth.js";
+import { meetingPrepRouter, objectionInsightsRouter } from "./routes/meetingPrep.js";
+import { contentAttributionRouter, channelPerformanceRouter } from "./routes/contentAttribution.js";
+import { hunterContactsRouter } from "./routes/hunterContacts.js";
+import { listmonkIntegrationRouter } from "./routes/listmonkIntegration.js";
+import { listmonkWebhooksRouter } from "./routes/listmonkWebhooks.js";
+import { postizIntegrationRouter } from "./routes/postizIntegration.js";
+import { postizWebhooksRouter } from "./routes/postizWebhooks.js";
+import { prospectingCampaignsRouter } from "./routes/prospectingCampaigns.js";
+import { leadPromotionRouter } from "./routes/leadPromotion.js";
+import { growthAdvisorRouter } from "./routes/growthAdvisor.js";
+import { publicGrowthRouter } from "./routes/publicGrowth.js";
+import { internalGrowthRouter } from "./routes/internalGrowth.js";
 
 export function createApp(): express.Express {
   const app = express();
 
   app.disable("x-powered-by");
-  app.use(express.json({ limit: "1mb" }));
+  app.use(
+    express.json({
+      limit: "1mb",
+      // Captures the exact raw request bytes onto req.rawBody — needed by
+      // routes/chatwootWebhooks.ts to verify Chatwoot's HMAC-SHA256
+      // webhook signature, which is computed over the raw bytes Chatwoot
+      // sent, not a re-serialization of the parsed JSON body. Harmless for
+      // every other route (nothing else reads req.rawBody today).
+      verify: (req, _res, buf) => {
+        (req as express.Request).rawBody = buf;
+      },
+    }),
+  );
   app.use(
     pinoHttp({
       logger,
@@ -82,6 +123,22 @@ export function createApp(): express.Express {
   app.use("/api/v1/health", mainCors, healthRouter);
   app.use("/api/v1/public", publicCors, publicLeadsRouter);
   app.use("/api/v1/public", publicCors, publicUnsubscribeRouter);
+  app.use("/api/v1/public", publicCors, publicLandingPagesRouter);
+  app.use("/api/v1/public", publicCors, publicChatbotRouter);
+  app.use("/api/v1/public", publicCors, listmonkWebhooksRouter);
+  // DevLaunch's own internal customer-acquisition workspace: unauthenticated
+  // website-growth-audit and demo-request capture (real crawl via
+  // growthAnalyzer.ts, real lead ingestion, per-IP rate-limited). See
+  // routes/publicGrowth.ts / routes/internalGrowth.ts.
+  app.use("/api/v1/public", publicCors, publicGrowthRouter);
+
+  app.use("/api/v1/webhooks/postiz", publicCors, postizWebhooksRouter);
+
+  // Chatwoot AgentBot webhook receiver — Chatwoot itself is the caller
+  // (no user session/JWT), authenticated via its own HMAC request
+  // signature (see routes/chatwootWebhooks.ts), same unauthenticated-CORS
+  // posture as the public widget surface above.
+  app.use("/api/v1/webhooks/chatwoot", publicCors, chatwootWebhooksRouter);
 
   app.use("/api/v1/auth", mainCors, authRouter);
   app.use("/api/v1/tenants", mainCors, tenantsRouter);
@@ -96,8 +153,33 @@ export function createApp(): express.Express {
   app.use("/api/v1/tenants/:tenantId/projects/:projectId/leads", mainCors, leadsRouter);
   app.use("/api/v1/tenants/:tenantId/projects/:projectId/campaigns", mainCors, campaignsRouter);
   app.use("/api/v1/tenants/:tenantId/projects/:projectId/analytics", mainCors, analyticsRouter);
+  // Milestone 3 Phase 1 real-deployment fix: the three dedicated provider
+  // integration routers (chatwoot/listmonk/postiz) MUST be mounted before
+  // the generic `/integrations` registry router below — that router
+  // defines its own `POST /:provider/connect` and `POST
+  // /:provider/health-check` routes, which otherwise silently shadow
+  // (intercept and fully respond to) every request meant for a dedicated
+  // router's own, more-correct `/connect`/`/health-check` endpoints,
+  // since Express resolves prefix-matched middleware in registration
+  // order and the first one that sends a response wins. Confirmed via a
+  // real end-to-end Postiz connect call during Milestone 3 Phase 1
+  // real-world testing: it silently returned the generic router's
+  // "pending_setup" response shape instead of ever reaching
+  // postizIntegrationRouter's real GET /public/v1/me verification —
+  // discovered only because a real external call was made, exactly the
+  // kind of bug mocked tests cannot catch. Other sub-paths
+  // (/sync-subscribers, /social-accounts, /conversations, etc.) were
+  // never affected, only the two routes both routers happen to define.
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/integrations/chatwoot", mainCors, chatwootIntegrationRouter);
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/integrations/listmonk", mainCors, listmonkIntegrationRouter);
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/integrations/postiz", mainCors, postizIntegrationRouter);
   app.use("/api/v1/tenants/:tenantId/projects/:projectId/integrations", mainCors, integrationsRouter);
   app.use("/api/v1/tenants/:tenantId/projects/:projectId/discovery-sources", mainCors, discoverySourcesRouter);
+  app.use(
+    "/api/v1/tenants/:tenantId/projects/:projectId/prospecting-campaigns",
+    mainCors,
+    prospectingCampaignsRouter,
+  );
   app.use(
     "/api/v1/tenants/:tenantId/projects/:projectId/discovered-organizations",
     mainCors,
@@ -128,6 +210,11 @@ export function createApp(): express.Express {
   );
   app.use("/api/v1/tenants/:tenantId/projects/:projectId/onboarding", mainCors, onboardingRouter);
   app.use("/api/v1/tenants/:tenantId/projects/:projectId/leads/:leadId/replies", mainCors, repliesRouter);
+  app.use(
+    "/api/v1/tenants/:tenantId/projects/:projectId/leads/:leadId/promote-to-crm",
+    mainCors,
+    leadPromotionRouter,
+  );
   app.use("/api/v1/tenants/:tenantId/projects/:projectId/learning-loop", mainCors, learningLoopRouter);
   app.use("/api/v1/tenants/:tenantId/projects/:projectId/competitors", mainCors, competitorsRouter);
   app.use("/api/v1/tenants/:tenantId/projects/:projectId/content-calendars", mainCors, contentCalendarsRouter);
@@ -164,6 +251,44 @@ export function createApp(): express.Express {
   // Phase 4: cross-agent workflow orchestration (client onboarding -> ... ->
   // analytics/learning), one stage per advance call. See apps/api/src/workflow/.
   app.use("/api/v1/tenants/:tenantId/projects/:projectId/workflows", mainCors, workflowsRouter);
+
+  // Customer Acquisition Engine (growth analyzer, landing pages, prospect
+  // discovery extensions, chatbot, sales pipeline, growth/revenue analytics).
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/growth-analyses", mainCors, growthAnalyzerRouter);
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/landing-pages", mainCors, landingPagesRouter);
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/chatbot", mainCors, chatbotAdminRouter);
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/deals", mainCors, dealHealthRouter);
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/deals", mainCors, dealsRouter);
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/meetings", mainCors, meetingsRouter);
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/companies", mainCors, companiesRouter);
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/contacts", mainCors, contactsRouter);
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/notes", mainCors, notesRouter);
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/leads/:leadId/activity", mainCors, leadActivityRouter);
+  // (chatwoot/listmonk/postiz integration routers are mounted earlier,
+  // before the generic /integrations registry router — see that comment.)
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/crm-dashboard", mainCors, crmDashboardRouter);
+  app.use(
+    "/api/v1/tenants/:tenantId/projects/:projectId/leads/:leadId/meetings/:meetingId/prep",
+    mainCors,
+    meetingPrepRouter,
+  );
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/objection-insights", mainCors, objectionInsightsRouter);
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/content-attribution", mainCors, contentAttributionRouter);
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/channel-performance", mainCors, channelPerformanceRouter);
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/hunter", mainCors, hunterContactsRouter);
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/growth-analytics", mainCors, growthAnalyticsRouter);
+  app.use(
+    "/api/v1/tenants/:tenantId/projects/:projectId/campaign-attribution",
+    mainCors,
+    campaignAttributionRouter,
+  );
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/growth-advisor", mainCors, growthAdvisorRouter);
+  // DevLaunch's own internal customer-acquisition workspace (trials/CAC/
+  // audit-requests/demo-requests) — `assertInternalTenant` inside this
+  // router 403s any tenant id other than the one designated internal
+  // workspace tenant, so mounting it on the normal tenant-scoped path is
+  // safe: it's just another tenant, RLS-isolated like any other.
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/internal-growth", mainCors, internalGrowthRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

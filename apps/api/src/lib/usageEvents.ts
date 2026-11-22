@@ -1,6 +1,14 @@
 import type { PoolClient } from "pg";
 
-export type UsageEventType = "agent_run" | "api_request" | "lead_captured" | "ai_tokens";
+export type UsageEventType =
+  | "agent_run"
+  | "api_request"
+  | "lead_captured"
+  | "ai_tokens"
+  | "hunter_api_request"
+  | "hunter_discovery"
+  | "hunter_verification"
+  | "hunter_request_failed";
 
 export interface RecordUsageEventParams {
   client: PoolClient;
