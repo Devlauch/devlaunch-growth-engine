@@ -170,6 +170,14 @@ export function Layout({ children, crumbs, tenantName, projectName, hasLeads = t
                     Analytics
                   </NavLink>
                   <NavLink
+                    to={`/tenants/${tenantId}/projects/${projectId}/reports`}
+                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/reports`)}
+                    icon={<IconChart />}
+                    onClick={closeMobileNav}
+                  >
+                    Reports
+                  </NavLink>
+                  <NavLink
                     to={`/tenants/${tenantId}/projects/${projectId}/integrations`}
                     active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/integrations`)}
                     icon={<IconPlug />}

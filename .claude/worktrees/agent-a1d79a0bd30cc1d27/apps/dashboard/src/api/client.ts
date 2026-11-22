@@ -128,3 +128,37 @@ export const api = {
   post: <T>(path: string, body?: unknown) => apiRequest<T>(path, { method: "POST", body }),
   patch: <T>(path: string, body?: unknown) => apiRequest<T>(path, { method: "PATCH", body }),
 };
+
+/**
+ * Downloads a binary (PDF) response through the authenticated API — used
+ * for GET .../reports/:id/download, which is never a plain unauthenticated
+ * URL. Fetches the bytes with the same Authorization header as apiRequest,
+ * then hands the browser a short-lived object URL to actually save it.
+ */
+export async function downloadFile(path: string, filename: string): Promise<void> {
+  const token = getAccessToken();
+  const headers: Record<string, string> = {};
+  if (token) headers.authorization = `Bearer ${token}`;
+
+  const res = await fetch(`${API_BASE_URL}${path}`, { headers });
+  if (!res.ok) {
+    let message = `Download failed (${res.status})`;
+    try {
+      const errBody = (await res.json()) as { error?: { message?: string } };
+      if (errBody?.error?.message) message = errBody.error.message;
+    } catch {
+      // body wasn't JSON
+    }
+    throw new ApiError(res.status, message);
+  }
+
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}

@@ -65,6 +65,12 @@ icpProfilesRouter.post("/", async (req, res, next) => {
       ],
     );
 
+    await req.tenantDb!.query(
+      `INSERT INTO audit_events (tenant_id, actor_type, actor_user_id, action, entity_type, entity_id, metadata)
+       VALUES ($1, 'user', $2, 'icp_profile.created', 'icp_profile', $3, '{}'::jsonb)`,
+      [req.tenantId, req.userId, result.rows[0].id],
+    );
+
     res.status(201).json({ icpProfile: result.rows[0] });
   } catch (err) {
     next(err);

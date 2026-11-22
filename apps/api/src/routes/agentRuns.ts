@@ -6,6 +6,7 @@ import { Errors } from "../lib/httpError.js";
 import { enqueueAgentRun } from "../lib/queue.js";
 import type { AgentRunResult } from "@devlaunch/agent-sdk";
 import { logger } from "../lib/logger.js";
+import { recordUsageEvent } from "../lib/usageEvents.js";
 
 export const agentRunsRouter = Router({ mergeParams: true });
 agentRunsRouter.use(requireAuth, requireTenantMembership);
@@ -72,6 +73,17 @@ agentRunsRouter.post("/", async (req, res, next) => {
       [req.tenantId, body.agentInstanceId, JSON.stringify(inputWithKey)],
     );
     const executionId = execution.rows[0].id;
+
+    // Real usage tracking: one agent_run event per run actually queued
+    // (see src/lib/usageEvents.ts / src/routes/usage.ts) — never a
+    // fabricated/estimated count.
+    await recordUsageEvent({
+      client: req.tenantDb!,
+      tenantId: req.tenantId as string,
+      projectId,
+      eventType: "agent_run",
+      metadata: { agentKey: agentInstance.agent_key, executionId },
+    });
 
     await req.tenantDb!.query(
       `INSERT INTO audit_events (tenant_id, actor_type, actor_user_id, action, entity_type, entity_id, metadata)

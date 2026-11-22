@@ -10,6 +10,7 @@ import { ExecutionPage } from "./pages/ExecutionPage";
 import { CampaignsPage } from "./pages/CampaignsPage";
 import { CampaignDetailPage } from "./pages/CampaignDetailPage";
 import { AnalyticsPage } from "./pages/AnalyticsPage";
+import { UsagePage } from "./pages/UsagePage";
 import { IntegrationsPage } from "./pages/IntegrationsPage";
 import { DiscoveryPage } from "./pages/DiscoveryPage";
 import { ScoringPage } from "./pages/ScoringPage";
@@ -53,6 +54,14 @@ export function App() {
         element={
           <RequireAuth>
             <ProjectPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/tenants/:tenantId/usage"
+        element={
+          <RequireAuth>
+            <UsagePage />
           </RequireAuth>
         }
       />

@@ -5,6 +5,7 @@ import { LoginPage } from "./pages/LoginPage";
 import { HomePage } from "./pages/HomePage";
 import { LandingPage } from "./pages/LandingPage";
 import { TenantPage } from "./pages/TenantPage";
+import { BrandingPage } from "./pages/BrandingPage";
 import { ProjectPage } from "./pages/ProjectPage";
 import { ExecutionPage } from "./pages/ExecutionPage";
 import { CampaignsPage } from "./pages/CampaignsPage";
@@ -45,6 +46,14 @@ export function App() {
         element={
           <RequireAuth>
             <TenantPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/tenants/:tenantId/branding"
+        element={
+          <RequireAuth>
+            <BrandingPage />
           </RequireAuth>
         }
       />

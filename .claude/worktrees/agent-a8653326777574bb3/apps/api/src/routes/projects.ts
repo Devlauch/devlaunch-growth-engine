@@ -4,6 +4,7 @@ import { z } from "zod";
 import { requireAuth } from "../middleware/auth.js";
 import { requireTenantMembership } from "../middleware/tenant.js";
 import { Errors } from "../lib/httpError.js";
+import { enforceQuota } from "../lib/quota.js";
 
 export const projectsRouter = Router({ mergeParams: true });
 projectsRouter.use(requireAuth, requireTenantMembership);
@@ -51,6 +52,11 @@ const patchProjectSchema = z.object({
 projectsRouter.post("/", async (req, res, next) => {
   try {
     const body = createProjectSchema.parse(req.body);
+
+    // Subscription-plan quota enforcement: a real COUNT(*) against the
+    // tenant's current project count, checked before creating one more.
+    await enforceQuota(req.tenantDb!, req.tenantId as string, "projects");
+
     const publicApiKey = `pk_${randomBytes(24).toString("hex")}`;
 
     const existing = await req.tenantDb!.query(

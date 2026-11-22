@@ -3,6 +3,7 @@ import { z } from "zod";
 import { requireAuth } from "../middleware/auth.js";
 import { requireTenantMembership } from "../middleware/tenant.js";
 import { Errors } from "../lib/httpError.js";
+import { enforceQuota } from "../lib/quota.js";
 
 export const membershipsRouter = Router({ mergeParams: true });
 membershipsRouter.use(requireAuth, requireTenantMembership);
@@ -34,6 +35,20 @@ membershipsRouter.post("/", async (req, res, next) => {
     const userExists = await req.tenantDb!.query("SELECT id FROM users WHERE id = $1", [body.userId]);
     if (userExists.rowCount === 0) {
       throw Errors.notFound("User not found");
+    }
+
+    // Subscription-plan quota enforcement: a real COUNT(*) of active team
+    // members, checked before adding one more. Skipped when this is a
+    // re-invite/role-change of a user who already has a membership row for
+    // this tenant (the INSERT below is an ON CONFLICT DO UPDATE in that
+    // case, not a new member) — that user already counts toward usage, so
+    // blocking it here would incorrectly reject role changes at the limit.
+    const existingMembership = await req.tenantDb!.query(
+      "SELECT 1 FROM memberships WHERE tenant_id = $1 AND user_id = $2",
+      [req.tenantId, body.userId],
+    );
+    if (existingMembership.rowCount === 0) {
+      await enforceQuota(req.tenantDb!, req.tenantId as string, "teamMembers");
     }
 
     const result = await req.tenantDb!.query(

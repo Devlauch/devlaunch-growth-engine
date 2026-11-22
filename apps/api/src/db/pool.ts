@@ -54,3 +54,27 @@ export async function withUserContext<T>(userId: string, fn: (client: pg.PoolCli
     client.release();
   }
 }
+
+/**
+ * Runs `fn` inside a transaction with app.current_tenant_id set (tx-local)
+ * to `tenantId` — the same pattern as requireTenantMembership
+ * (src/middleware/tenant.ts), for the rare write that happens outside any
+ * HTTP request and so has no req.tenantDb to reuse (currently: the
+ * periodic api_request usage-event flush in src/lib/usageTracking.ts).
+ * Mirrors apps/worker/src/db.ts's withTenantContext exactly.
+ */
+export async function withTenantContext<T>(tenantId: string, fn: (client: pg.PoolClient) => Promise<T>): Promise<T> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("SELECT set_config('app.current_tenant_id', $1, true)", [tenantId]);
+    const result = await fn(client);
+    await client.query("COMMIT");
+    return result;
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw err;
+  } finally {
+    client.release();
+  }
+}

@@ -32,4 +32,11 @@ export const env = {
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean),
+
+  // Client PDF reports: local-volume file store (no S3/object storage is
+  // configured in this environment — see docker-compose.yml's
+  // `report_files` volume, shared with apps/worker which writes the PDFs
+  // here; apps/api only ever reads from it via the authenticated
+  // GET .../reports/:id/download route).
+  reportFilesDir: process.env.REPORT_FILES_DIR ?? "./report_files",
 };

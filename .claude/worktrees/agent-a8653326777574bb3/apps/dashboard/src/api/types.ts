@@ -244,6 +244,30 @@ export interface DiscoveryRunResult {
 
 export type ApprovalStatus = "pending" | "approved" | "rejected" | "expired";
 
+// Subscription plan data model (NOT real payment processing — see
+// apps/api/src/routes/planUsage.ts). GET /tenants/:tenantId/plan.
+export type PlanName = "free" | "starter" | "growth" | "enterprise";
+
+export interface PlanLimits {
+  maxProjects: number | null;
+  maxAgentRunsPerDay: number | null;
+  maxTeamMembers: number | null;
+  maxDiscoverySources: number | null;
+}
+
+export type QuotaResource = "projects" | "agentRunsPerDay" | "teamMembers" | "discoverySources";
+
+export interface QuotaUsageEntry {
+  current: number;
+  limit: number | null;
+}
+
+export interface PlanUsageResponse {
+  plan: PlanName;
+  limits: PlanLimits;
+  usage: Record<QuotaResource, QuotaUsageEntry>;
+}
+
 export interface Approval {
   id: string;
   status: ApprovalStatus;

@@ -134,6 +134,15 @@ code {
   font-weight: 600;
 }
 
+/* Tenant white-label logo, shown in place of the default wordmark once a
+   tenant has set logo_url (see Layout.tsx / BrandingPage.tsx). */
+.brand-logo {
+  max-width: 160px;
+  max-height: 36px;
+  object-fit: contain;
+  display: block;
+}
+
 .sidebar-nav {
   display: flex;
   flex-direction: column;

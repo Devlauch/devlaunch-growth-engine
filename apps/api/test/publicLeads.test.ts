@@ -91,6 +91,7 @@ describe("POST /api/v1/public/projects/:projectPublicKey/leads", () => {
       .mockResolvedValueOnce(undefined) // set_config current_tenant_id
       .mockResolvedValueOnce({ rows: [{ id: "lead-1", created_at: "2026-01-01T00:00:00.000Z" }] }) // insert lead
       .mockResolvedValueOnce(undefined) // insert audit_event
+      .mockResolvedValueOnce(undefined) // insert usage_event (lead_captured)
       .mockResolvedValueOnce(undefined); // COMMIT
 
     const app = buildApp();
@@ -101,6 +102,11 @@ describe("POST /api/v1/public/projects/:projectPublicKey/leads", () => {
 
     expect(res.status).toBe(201);
     expect(res.body.lead.id).toBe("lead-1");
+
+    const usageCall = queryMock.mock.calls.find(([sql]) => typeof sql === "string" && sql.includes("INSERT INTO usage_events"));
+    expect(usageCall).toBeDefined();
+    expect(usageCall![1][0]).toBe("tenant-1");
+    expect(usageCall![1][2]).toBe("lead_captured");
 
     const auditCall = queryMock.mock.calls.find(([sql]) => typeof sql === "string" && sql.includes("INSERT INTO audit_events"));
     expect(auditCall).toBeDefined();
@@ -126,6 +132,7 @@ describe("POST /api/v1/public/projects/:projectPublicKey/leads", () => {
       .mockResolvedValueOnce(undefined) // set_config current_tenant_id
       .mockResolvedValueOnce({ rows: [{ id: "lead-1", created_at: "2026-01-01T00:00:00.000Z" }] }) // insert lead
       .mockResolvedValueOnce(undefined) // insert audit_event
+      .mockResolvedValueOnce(undefined) // insert usage_event (lead_captured)
       .mockResolvedValueOnce(undefined); // COMMIT
 
     const app = buildApp();

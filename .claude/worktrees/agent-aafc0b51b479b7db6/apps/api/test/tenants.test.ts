@@ -109,7 +109,15 @@ describe("PATCH /api/v1/tenants/:tenantId (branding & onboarding fields)", () =>
     );
     expect(auditCall).toBeDefined();
     expect(auditCall![1][0]).toBe(TENANT_A);
+    expect(auditCall![1][1]).toBe(USER_1);
     expect(auditCall![1][2]).toBe("tenant.branding_updated");
+    expect(JSON.parse(auditCall![1][3])).toEqual({
+      industry: "SaaS",
+      goals: "Grow qualified pipeline",
+      logoUrl: "https://cdn.example.com/acme-logo.png",
+      primaryColor: "#6d5cf0",
+      subdomain: "acme",
+    });
   });
 
   it("rejects a non-hex primaryColor with a validation error and never reaches the UPDATE", async () => {

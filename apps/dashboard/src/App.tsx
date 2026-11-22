@@ -10,6 +10,7 @@ import { ExecutionPage } from "./pages/ExecutionPage";
 import { CampaignsPage } from "./pages/CampaignsPage";
 import { CampaignDetailPage } from "./pages/CampaignDetailPage";
 import { AnalyticsPage } from "./pages/AnalyticsPage";
+import { UsagePage } from "./pages/UsagePage";
 import { IntegrationsPage } from "./pages/IntegrationsPage";
 import { DiscoveryPage } from "./pages/DiscoveryPage";
 import { ScoringPage } from "./pages/ScoringPage";
@@ -17,6 +18,12 @@ import { PriorityQueuePage } from "./pages/PriorityQueuePage";
 import { WidgetSettingsPage } from "./pages/WidgetSettingsPage";
 import { SendingSetupPage } from "./pages/SendingSetupPage";
 import { OnboardingWizardPage } from "./pages/OnboardingWizardPage";
+import { CompetitorIntelligencePage } from "./pages/CompetitorIntelligencePage";
+import { ContentStrategyPage } from "./pages/ContentStrategyPage";
+import { SeoAuditPage } from "./pages/SeoAuditPage";
+import { LeadIntelligencePage } from "./pages/LeadIntelligencePage";
+import { ConversionOptimizationPage } from "./pages/ConversionOptimizationPage";
+import { MarketingIntelligencePage } from "./pages/MarketingIntelligencePage";
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { user, loading } = useAuth();
@@ -53,6 +60,14 @@ export function App() {
         element={
           <RequireAuth>
             <ProjectPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/tenants/:tenantId/usage"
+        element={
+          <RequireAuth>
+            <UsagePage />
           </RequireAuth>
         }
       />
@@ -133,6 +148,54 @@ export function App() {
         element={
           <RequireAuth>
             <OnboardingWizardPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/tenants/:tenantId/projects/:projectId/competitor-intelligence"
+        element={
+          <RequireAuth>
+            <CompetitorIntelligencePage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/tenants/:tenantId/projects/:projectId/content-strategy"
+        element={
+          <RequireAuth>
+            <ContentStrategyPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/tenants/:tenantId/projects/:projectId/seo"
+        element={
+          <RequireAuth>
+            <SeoAuditPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/tenants/:tenantId/projects/:projectId/lead-intelligence"
+        element={
+          <RequireAuth>
+            <LeadIntelligencePage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/tenants/:tenantId/projects/:projectId/conversion-optimization"
+        element={
+          <RequireAuth>
+            <ConversionOptimizationPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/tenants/:tenantId/projects/:projectId/marketing-intelligence"
+        element={
+          <RequireAuth>
+            <MarketingIntelligencePage />
           </RequireAuth>
         }
       />

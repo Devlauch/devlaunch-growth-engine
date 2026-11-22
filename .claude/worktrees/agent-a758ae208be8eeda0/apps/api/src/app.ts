@@ -38,6 +38,8 @@ import { sendingDomainsRouter, warmupConfigsRouter, sendHealthRouter } from "./r
 import { onboardingRouter } from "./routes/onboarding.js";
 import { repliesRouter } from "./routes/replies.js";
 import { learningLoopRouter } from "./routes/learningLoop.js";
+import { usageRouter } from "./routes/usage.js";
+import { apiRequestCounterMiddleware } from "./lib/usageTracking.js";
 
 export function createApp(): express.Express {
   const app = express();
@@ -50,6 +52,11 @@ export function createApp(): express.Express {
       autoLogging: { ignore: (req: import("node:http").IncomingMessage) => req.url === "/api/v1/health" },
     }),
   );
+  // Real usage tracking (api_request volume) — see src/lib/usageTracking.ts
+  // for why this is an in-memory counter + periodic flush rather than a
+  // synchronous insert per request. Mounted globally/first so it sees
+  // every request, regardless of which router below ultimately handles it.
+  app.use(apiRequestCounterMiddleware);
 
   // Main (authenticated) API surface: only the configured dashboard
   // origin(s) by default.
@@ -114,6 +121,7 @@ export function createApp(): express.Express {
   app.use("/api/v1/tenants/:tenantId/agent-executions", mainCors, tenantAgentExecutionRouter);
   app.use("/api/v1/tenants/:tenantId/approvals", mainCors, approvalsRouter);
   app.use("/api/v1/tenants/:tenantId/audit-events", mainCors, auditEventsRouter);
+  app.use("/api/v1/tenants/:tenantId/usage", mainCors, usageRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

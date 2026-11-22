@@ -3,6 +3,7 @@ import { z } from "zod";
 import { requireAuth } from "../middleware/auth.js";
 import { requireTenantMembership } from "../middleware/tenant.js";
 import { Errors } from "../lib/httpError.js";
+import { enforceQuota } from "../lib/quota.js";
 import { enqueueAgentRun } from "../lib/queue.js";
 import type { AgentRunResult } from "@devlaunch/agent-sdk";
 import { logger } from "../lib/logger.js";
@@ -59,6 +60,13 @@ agentRunsRouter.post("/", async (req, res, next) => {
         return;
       }
     }
+
+    // Subscription-plan quota enforcement: a real COUNT(*) of today's agent
+    // runs for this tenant, checked before creating one more. Deliberately
+    // after the idempotency-key lookup above, so retrying an already-queued
+    // run via the same idempotencyKey never gets blocked by a quota that
+    // run itself already counts against.
+    await enforceQuota(req.tenantDb!, req.tenantId as string, "agentRunsPerDay");
 
     const inputWithKey = {
       ...(typeof body.input === "object" && body.input !== null ? (body.input as Record<string, unknown>) : { value: body.input }),

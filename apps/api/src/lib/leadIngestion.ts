@@ -1,5 +1,6 @@
 import type { PoolClient } from "pg";
 import { z } from "zod";
+import { recordUsageEvent } from "./usageEvents.js";
 
 /**
  * The single lead-ingestion path. Used by BOTH:
@@ -98,6 +99,17 @@ export async function ingestLead(params: IngestLeadParams): Promise<IngestedLead
       JSON.stringify({ source: source === "public_widget" ? "public_widget" : source, project_id: projectId, origin: origin ?? null }),
     ],
   );
+
+  // Real usage tracking: one lead_captured event per lead actually
+  // ingested through this single shared path (internal + public widget
+  // both land here) — see src/lib/usageEvents.ts / src/routes/usage.ts.
+  await recordUsageEvent({
+    client,
+    tenantId,
+    projectId,
+    eventType: "lead_captured",
+    metadata: { source },
+  });
 
   return { id: row.id, createdAt: row.created_at };
 }

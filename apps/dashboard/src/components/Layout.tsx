@@ -117,6 +117,14 @@ export function Layout({ children, crumbs, tenantName, projectName, hasLeads = t
               >
                 Projects
               </NavLink>
+              <NavLink
+                to={`/tenants/${tenantId}/usage`}
+                active={location.pathname === `/tenants/${tenantId}/usage`}
+                icon={<IconChart />}
+                onClick={closeMobileNav}
+              >
+                Usage
+              </NavLink>
 
               {projectId ? (
                 <>
@@ -176,6 +184,65 @@ export function Layout({ children, crumbs, tenantName, projectName, hasLeads = t
                     onClick={closeMobileNav}
                   >
                     Integrations
+                  </NavLink>
+                  <span className="nav-section-label">Marketing Intelligence</span>
+                  <NavLink
+                    to={`/tenants/${tenantId}/projects/${projectId}/competitor-intelligence`}
+                    active={location.pathname.startsWith(
+                      `/tenants/${tenantId}/projects/${projectId}/competitor-intelligence`,
+                    )}
+                    icon={<IconTarget />}
+                    onClick={closeMobileNav}
+                  >
+                    Competitors
+                  </NavLink>
+                  <NavLink
+                    to={`/tenants/${tenantId}/projects/${projectId}/content-strategy`}
+                    active={location.pathname.startsWith(
+                      `/tenants/${tenantId}/projects/${projectId}/content-strategy`,
+                    )}
+                    icon={<IconLayers />}
+                    onClick={closeMobileNav}
+                  >
+                    Content Strategy
+                  </NavLink>
+                  <NavLink
+                    to={`/tenants/${tenantId}/projects/${projectId}/seo`}
+                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/seo`)}
+                    icon={<IconSearch />}
+                    onClick={closeMobileNav}
+                  >
+                    Technical SEO
+                  </NavLink>
+                  <NavLink
+                    to={`/tenants/${tenantId}/projects/${projectId}/lead-intelligence`}
+                    active={location.pathname.startsWith(
+                      `/tenants/${tenantId}/projects/${projectId}/lead-intelligence`,
+                    )}
+                    icon={<IconUsers />}
+                    onClick={closeMobileNav}
+                  >
+                    Lead Intelligence
+                  </NavLink>
+                  <NavLink
+                    to={`/tenants/${tenantId}/projects/${projectId}/conversion-optimization`}
+                    active={location.pathname.startsWith(
+                      `/tenants/${tenantId}/projects/${projectId}/conversion-optimization`,
+                    )}
+                    icon={<IconChart />}
+                    onClick={closeMobileNav}
+                  >
+                    Conversion Optimization
+                  </NavLink>
+                  <NavLink
+                    to={`/tenants/${tenantId}/projects/${projectId}/marketing-intelligence`}
+                    active={location.pathname.startsWith(
+                      `/tenants/${tenantId}/projects/${projectId}/marketing-intelligence`,
+                    )}
+                    icon={<IconBell />}
+                    onClick={closeMobileNav}
+                  >
+                    Ask &amp; Reports
                   </NavLink>
                   <NavLink
                     to={`/tenants/${tenantId}/projects/${projectId}/onboarding`}

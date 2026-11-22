@@ -17,6 +17,7 @@ import { PriorityQueuePage } from "./pages/PriorityQueuePage";
 import { WidgetSettingsPage } from "./pages/WidgetSettingsPage";
 import { SendingSetupPage } from "./pages/SendingSetupPage";
 import { OnboardingWizardPage } from "./pages/OnboardingWizardPage";
+import { ReportsPage } from "./pages/ReportsPage";
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { user, loading } = useAuth();
@@ -133,6 +134,14 @@ export function App() {
         element={
           <RequireAuth>
             <OnboardingWizardPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/tenants/:tenantId/projects/:projectId/reports"
+        element={
+          <RequireAuth>
+            <ReportsPage />
           </RequireAuth>
         }
       />

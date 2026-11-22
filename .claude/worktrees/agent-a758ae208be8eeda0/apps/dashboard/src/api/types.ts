@@ -167,6 +167,29 @@ export interface AnalyticsOverview {
   };
 }
 
+export type UsageEventType = "agent_run" | "api_request" | "lead_captured" | "ai_tokens";
+
+export interface UsageSummaryEntry {
+  count: number;
+  quantity: number;
+}
+
+export interface UsagePerDay {
+  day: string;
+  eventType: UsageEventType;
+  quantity: number;
+}
+
+// GET /tenants/:tenantId/usage/overview — every field is a real SQL
+// aggregate over usage_events (packages/db migrations 230/231), never
+// estimated. ai_tokens is honestly empty today: no agent executor in this
+// codebase reports a real token count yet (see apps/api/src/routes/usage.ts's
+// doc comment) — it is never backfilled with a guessed number.
+export interface UsageOverview {
+  summary: Record<UsageEventType, UsageSummaryEntry>;
+  perDay: UsagePerDay[];
+}
+
 export type IntegrationProvider = "twenty" | "mautic" | "postiz" | "listmonk" | "posthog" | "formbricks";
 export type IntegrationStatus = "not_connected" | "pending_setup" | "connected" | "error";
 

@@ -190,8 +190,8 @@ tenantsRouter.patch("/:tenantId", requireTenantMembership, async (req, res, next
 
     await req.tenantDb!.query(
       `INSERT INTO audit_events (tenant_id, actor_type, actor_user_id, action, entity_type, entity_id, metadata)
-       VALUES ($1, 'user', $2, 'tenant.branding_updated', 'tenant', $1, $3::jsonb)`,
-      [req.tenantId, req.userId, JSON.stringify(body)],
+       VALUES ($1, 'user', $2, $3, 'tenant', $1, $4::jsonb)`,
+      [req.tenantId, req.userId, "tenant.branding_updated", JSON.stringify(body)],
     );
 
     res.json({ tenant: result.rows[0] });

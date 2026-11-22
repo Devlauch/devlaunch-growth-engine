@@ -254,3 +254,29 @@ export interface Approval {
   requested_at: string;
   reviewed_at: string | null;
 }
+
+// GET /tenants/:tenantId/notifications — real in-app notifications only
+// (see apps/api/src/lib/notify.ts). There is no email/WhatsApp sending in
+// this environment, so every row here reflects a genuine platform event.
+export interface Notification {
+  id: string;
+  type: string;
+  title: string;
+  body: string;
+  link_url: string | null;
+  read_at: string | null;
+  created_at: string;
+}
+
+// GET /tenants/:tenantId/audit-events
+export interface AuditEvent {
+  id: string;
+  actor_type: "user" | "agent" | "system";
+  actor_user_id: string | null;
+  actor_agent_instance_id: string | null;
+  action: string;
+  entity_type: string;
+  entity_id: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}

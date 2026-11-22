@@ -38,6 +38,8 @@ import { sendingDomainsRouter, warmupConfigsRouter, sendHealthRouter } from "./r
 import { onboardingRouter } from "./routes/onboarding.js";
 import { repliesRouter } from "./routes/replies.js";
 import { learningLoopRouter } from "./routes/learningLoop.js";
+import { reportsRouter } from "./routes/reports.js";
+import { reportSchedulesRouter } from "./routes/reportSchedules.js";
 
 export function createApp(): express.Express {
   const app = express();
@@ -114,6 +116,12 @@ export function createApp(): express.Express {
   app.use("/api/v1/tenants/:tenantId/agent-executions", mainCors, tenantAgentExecutionRouter);
   app.use("/api/v1/tenants/:tenantId/approvals", mainCors, approvalsRouter);
   app.use("/api/v1/tenants/:tenantId/audit-events", mainCors, auditEventsRouter);
+
+  // Client PDF reports (on-demand + scheduled) — additive only, mounted
+  // last; see docs/API_DEVIATIONS.md's tenant/project-scoping convention
+  // and apps/api/src/routes/reports.ts / reportSchedules.ts for details.
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/reports", mainCors, reportsRouter);
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/report-schedules", mainCors, reportSchedulesRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);
