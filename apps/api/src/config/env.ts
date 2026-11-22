@@ -167,4 +167,19 @@ export const env = {
   // but has never been exercised against the real API (see
   // docs/PHASE_2_HUNTER_VALIDATION.md).
   hunterApiKey: process.env.HUNTER_API_KEY ?? null,
+
+  // Apollo.io People Search (decision-maker discovery) and Google Custom
+  // Search JSON API (company discovery). Same convention as hunterApiKey
+  // above: a tenant's own encrypted credential (integrationCredentials.ts,
+  // stored via POST /integrations/apollo/connect or /integrations/google/
+  // connect) always takes priority; these are only a dev-mode/
+  // single-tenant-deployment fallback. Null in every environment this
+  // codebase has actually been run in — no real Apollo or Google API key is
+  // available here (see docs/PHASE_2_CREDENTIAL_AND_COST_REPORT.md).
+  apolloApiKey: process.env.APOLLO_API_KEY ?? null,
+  // Google's Custom Search JSON API requires BOTH an API key and a
+  // Programmable Search Engine ID ("cx") — neither alone is sufficient, see
+  // providerCredentials.ts's resolveGoogleSearchCredential.
+  googleSearchApiKey: process.env.GOOGLE_SEARCH_API_KEY ?? null,
+  googleSearchEngineId: process.env.GOOGLE_SEARCH_ENGINE_ID ?? null,
 };
