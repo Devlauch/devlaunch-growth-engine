@@ -1,12 +1,19 @@
 import { Worker, type Job } from "bullmq";
 import { AGENT_RUN_QUEUE_NAME, createRedisConnection, type AgentRunJobData } from "./queue.js";
-import { withTenantContext, pool } from "./db.js";
+import { withTenantContext, pool, assertDatabaseRoleRespectsRls } from "./db.js";
 import { getExecutor } from "./agents/registry.js";
 import { logger } from "./logger.js";
 import { startReportWorker } from "./reports/reportWorker.js";
 import { startScheduleLoop } from "./reports/scheduleLoop.js";
+import { startSequenceSchedulerCron } from "./jobs/sequenceSchedulerCron.js";
+import { startStalledDealCron } from "./jobs/stalledDealCron.js";
 
 const connection = createRedisConnection();
+
+void assertDatabaseRoleRespectsRls().catch((err) => {
+  logger.error({ err }, "database role RLS check failed");
+  process.exit(1);
+});
 
 async function processAgentRun(job: Job<AgentRunJobData>): Promise<void> {
   const { executionId, tenantId, agentId, input } = job.data;
@@ -84,10 +91,20 @@ logger.info({ queue: AGENT_RUN_QUEUE_NAME }, "worker started, waiting for jobs")
 // "no email is sent" limitation this environment has.
 const reportWorker = startReportWorker();
 const scheduleLoopHandle = startScheduleLoop(pool);
+// Multi-channel campaign execution: a real recurring loop replacing the
+// previous manual-trigger-only `POST /sequences/advance` limitation. See
+// apps/worker/src/jobs/sequenceSchedulerCron.ts.
+const sequenceSchedulerHandle = startSequenceSchedulerCron(pool);
+// Sales pipeline follow-up automation: a real recurring loop replacing the
+// previous manual-trigger-only `POST /deals/check-stalled` limitation. See
+// apps/worker/src/jobs/stalledDealCron.ts.
+const stalledDealCronHandle = startStalledDealCron(pool);
 
 async function shutdown(signal: string) {
   logger.info({ signal }, "shutting down worker");
   clearInterval(scheduleLoopHandle);
+  clearInterval(sequenceSchedulerHandle);
+  clearInterval(stalledDealCronHandle);
   await worker.close();
   await reportWorker.close();
   await connection.quit().catch(() => undefined);

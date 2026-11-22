@@ -1,0 +1,199 @@
+# OPT-IN, ADDITIVE override file for Chatwoot (live chat / omnichannel
+# inbox — see docs/OPEN_SOURCE_INTEGRATION_AUDIT.md's "chatwoot" section
+# and docs/INTEGRATION_STATUS.md). Does NOT edit the main docker-compose.yml
+# — matches that file's own `crawl4ai` block's "opt-in, independent
+# service" convention (profile-gated, pulls its own external image, no
+# default-on behavior for a plain `docker compose up`).
+#
+# Chatwoot is a full Ruby/Rails + Vue application — a separate language
+# runtime from this platform's Node/TS stack (see the audit: "cannot be
+# merged in-process, only run as an independent service"). This file runs
+# its OWN Postgres + Redis (fully separate from the `postgres`/`redis`
+# services in docker-compose.yml — no shared schema, no shared instance;
+# per the audit's "Dependency conflicts" section, Chatwoot's isolation
+# model is app-layer `account_id`, materially different from platform's
+# RLS, so the two must never share a database) plus the Rails web process
+# and a Sidekiq background-job worker (Chatwoot requires Sidekiq for mailers/
+# webhooks/automation — it is not optional).
+#
+# Usage:
+#   cp .env.chatwoot.example .env.chatwoot
+#   # edit .env.chatwoot: set CHATWOOT_SECRET_KEY_BASE (openssl rand -hex 64)
+#   docker compose -f docker-compose.yml -f docker-compose.chatwoot.yml --profile chatwoot up -d
+#
+# After it's running: create the first Chatwoot account/admin user via its
+# own setup UI at http://localhost:${CHATWOOT_PORT:-3200}, create an
+# "Agent Bot" under that account (Settings > Integrations > Agent Bots),
+# note its `outgoing_url` (point it at this platform's
+# POST /api/v1/public/webhooks/chatwoot/:tenantId/:projectId) and `secret`
+# (set as CHATWOOT_WEBHOOK_SECRET in this platform's own apps/api
+# environment — see apps/api/src/config/env.ts), then connect it from
+# this platform's dashboard (ChatwootIntegrationPage.tsx) with the
+# account's own API access token.
+#
+# License note (docs/LICENCE_COMPLIANCE.md has the full entry): Chatwoot
+# core is MIT. This compose file pulls the stock `chatwoot/chatwoot`
+# image unmodified and never builds from a forked Dockerfile. Its paid
+# `enterprise/` directory (Captain AI, some SSO) is NOT depended on by
+# anything here — platform's own AgentBot webhook integration
+# (apps/api/src/routes/chatwootWebhooks.ts) is the free alternative path
+# the audit recommended specifically to avoid that dependency.
+name: devlaunch
+
+services:
+  chatwoot_postgres:
+    # REAL DEPLOYMENT FIX (verified 2026-11-22 against a live
+    # chatwoot/chatwoot:v4.20.1 container): a plain `postgres:16-alpine`
+    # fails `rails db:chatwoot_prepare` with
+    # `PG::FeatureNotSupported: extension "vector" is not available` —
+    # Chatwoot v4.x's schema (AI Agents/embeddings tables) requires the
+    # pgvector extension. Confirmed directly against Chatwoot's own
+    # official compose files in the reference clone
+    # (~/project/Growth/chatwoot/docker-compose.yaml and
+    # docker-compose.production.yaml both use `pgvector/pgvector:pg16`,
+    # not plain postgres) — this is Chatwoot's own documented requirement,
+    # not a guess. `pgvector/pgvector:pg16` is a drop-in postgres:16 image
+    # with the extension pre-built; CREATE EXTENSION vector is run by
+    # Chatwoot's own migrations, not by this compose file.
+    image: pgvector/pgvector:pg16
+    profiles: ["chatwoot"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${CHATWOOT_POSTGRES_USER:-chatwoot}
+      POSTGRES_PASSWORD: ${CHATWOOT_POSTGRES_PASSWORD:-chatwoot}
+      POSTGRES_DB: ${CHATWOOT_POSTGRES_DB:-chatwoot_production}
+    volumes:
+      - chatwoot_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${CHATWOOT_POSTGRES_USER:-chatwoot} -d ${CHATWOOT_POSTGRES_DB:-chatwoot_production}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  chatwoot_redis:
+    image: redis:7-alpine
+    profiles: ["chatwoot"]
+    restart: unless-stopped
+    volumes:
+      - chatwoot_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Rails web process. Pulls the official, unmodified chatwoot/chatwoot
+  # image (MIT core) — never a fork, never a custom Dockerfile, per
+  # docs/LICENCE_COMPLIANCE.md.
+  chatwoot:
+    image: chatwoot/chatwoot:v4.20.1
+    profiles: ["chatwoot"]
+    restart: unless-stopped
+    depends_on:
+      chatwoot_postgres:
+        condition: service_healthy
+      chatwoot_redis:
+        condition: service_healthy
+    entrypoint: docker/entrypoints/rails.sh
+    # REAL DEPLOYMENT FIX (verified 2026-11-22 against a live
+    # chatwoot/chatwoot:v4.20.1 container): that image is Alpine-based and
+    # has NO /bin/bash at all (only busybox /bin/sh) — confirmed via
+    # `docker exec ... which bash` (empty) and `ls /bin/bash` (No such
+    # file). The original `bash -c "..."` command here crash-looped with
+    # "docker/entrypoints/rails.sh: exec: line 34: bash: not found" on
+    # every single real boot attempt. `sh -c` (POSIX, works identically for
+    # this one-liner's `&&`) is correct for this image; do not reintroduce
+    # `bash` here.
+    command: >
+      sh -c "bundle exec rails db:chatwoot_prepare && bundle exec rails s -p 3000 -b 0.0.0.0"
+    environment:
+      RAILS_ENV: production
+      NODE_ENV: production
+      INSTALLATION_ENV: docker
+      SECRET_KEY_BASE: ${CHATWOOT_SECRET_KEY_BASE:?Set CHATWOOT_SECRET_KEY_BASE (openssl rand -hex 64) in .env.chatwoot}
+      FRONTEND_URL: ${CHATWOOT_FRONTEND_URL:-http://localhost:3200}
+      POSTGRES_HOST: chatwoot_postgres
+      POSTGRES_USERNAME: ${CHATWOOT_POSTGRES_USER:-chatwoot}
+      POSTGRES_PASSWORD: ${CHATWOOT_POSTGRES_PASSWORD:-chatwoot}
+      POSTGRES_DATABASE: ${CHATWOOT_POSTGRES_DB:-chatwoot_production}
+      REDIS_URL: redis://chatwoot_redis:6379
+      RAILS_LOG_TO_STDOUT: "true"
+      ENABLE_ACCOUNT_SIGNUP: ${CHATWOOT_ENABLE_ACCOUNT_SIGNUP:-false}
+      # This platform never depends on Chatwoot's paid enterprise/ directory
+      # (Captain AI, some SSO) — see this file's header comment.
+      #
+      # REAL DEPLOYMENT FIX (verified 2026-11-22): Chatwoot bundles the
+      # `rack-timeout` gem (config/initializers/rack_timeout.rb in the
+      # reference clone only tweaks its log level, not the timeout itself —
+      # the gem's own default RACK_TIMEOUT_SERVICE_TIMEOUT is 15 seconds).
+      # Real, reproduced failure against this live container: the first
+      # couple of authenticated API requests after boot (POST .../inboxes)
+      # each legitimately took 15-20s end to end (different backtraces each
+      # time — access_token lookup once, Avatarable's after_save once —
+      # i.e. generally slow request handling under this sandbox's available
+      # CPU/disk scheduling, not one specific slow line of Chatwoot code)
+      # and were aborted by rack-timeout at the 15s mark with a 500. This is
+      # an environment-capacity issue (constrained Docker-in-WSL2-in-Windows
+      # sandbox), not a Chatwoot bug or a platform wiring bug — raising the
+      # ceiling is the correct, honest fix for this class of environment.
+      # Lower this back toward the gem's 15s default for a production host
+      # with normal request latency.
+      RACK_TIMEOUT_SERVICE_TIMEOUT: ${CHATWOOT_RACK_TIMEOUT_SECONDS:-60}
+    ports:
+      - "${CHATWOOT_PORT:-3200}:3000"
+    volumes:
+      - chatwoot_storage:/app/storage
+    # REAL DEPLOYMENT FIX (verified 2026-11-22): this image has no `curl`
+    # either (`docker exec ... which curl` -> empty; the healthcheck's own
+    # recorded log was literally "/bin/sh: curl: not found", exit 1, on
+    # every single attempt — Docker reported the container "unhealthy" even
+    # though `GET /api` genuinely returned 200 the whole time, confirmed
+    # with `curl` run from OUTSIDE the container). `wget` (busybox) IS
+    # present and is what this fix uses instead.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:3000/api || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  # Sidekiq background-job worker — required by Chatwoot for mailers,
+  # outgoing webhooks/AgentBot deliveries, and automation rules. Same
+  # image, different entrypoint command; not optional.
+  chatwoot_worker:
+    image: chatwoot/chatwoot:v4.20.1
+    profiles: ["chatwoot"]
+    restart: unless-stopped
+    depends_on:
+      chatwoot_postgres:
+        condition: service_healthy
+      chatwoot_redis:
+        condition: service_healthy
+    entrypoint: docker/entrypoints/rails.sh
+    command: bundle exec sidekiq -C config/sidekiq.yml
+    environment:
+      RAILS_ENV: production
+      NODE_ENV: production
+      INSTALLATION_ENV: docker
+      SECRET_KEY_BASE: ${CHATWOOT_SECRET_KEY_BASE:?Set CHATWOOT_SECRET_KEY_BASE (openssl rand -hex 64) in .env.chatwoot}
+      FRONTEND_URL: ${CHATWOOT_FRONTEND_URL:-http://localhost:3200}
+      POSTGRES_HOST: chatwoot_postgres
+      POSTGRES_USERNAME: ${CHATWOOT_POSTGRES_USER:-chatwoot}
+      POSTGRES_PASSWORD: ${CHATWOOT_POSTGRES_PASSWORD:-chatwoot}
+      POSTGRES_DATABASE: ${CHATWOOT_POSTGRES_DB:-chatwoot_production}
+      REDIS_URL: redis://chatwoot_redis:6379
+      RAILS_LOG_TO_STDOUT: "true"
+    volumes:
+      - chatwoot_storage:/app/storage
+    # REAL DEPLOYMENT FIX (same root cause as the `chatwoot` service's
+    # command above — this image has no /bin/bash, only /bin/sh).
+    healthcheck:
+      test: ["CMD", "sh", "-c", "ps aux | grep '[s]idekiq' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+volumes:
+  chatwoot_postgres_data:
+  chatwoot_redis_data:
+  chatwoot_storage:

@@ -270,6 +270,12 @@ describe("POST /growth-analyses/analyze", () => {
         rows: [{ id: ANALYSIS_1, domain: "acme.example.com", status: "failed" }],
       }, // INSERT growth_analyses
       { rowCount: 1, rows: [{ id: "rec-icp", recommendation_type: "icp" }] }, // INSERT icp recommendation
+      // The stubbed fetch 404s everything (including the root page for
+      // runSiteAudit's own link-status check), so the technical site audit
+      // honestly reports a high-severity broken_link issue even though the
+      // Crawl4AI crawl itself failed — that's a real, separate finding, so
+      // it still gets its own conversion_opportunity recommendation row.
+      { rowCount: 1, rows: [{ id: "rec-conv", recommendation_type: "conversion_opportunity" }] },
     ]);
 
     const res = await request(app)

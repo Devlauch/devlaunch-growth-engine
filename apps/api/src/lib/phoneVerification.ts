@@ -1,17 +1,38 @@
+import { runProviderWaterfall } from "./providerWaterfall.js";
+
 /**
  * Basic, honest phone number handling for discovered contacts.
  *
  * We do NOT fabricate carrier/line-type lookups (that needs a paid
- * provider we don't have). What we do for real:
+ * provider we don't have). What the real, free implementation
+ * (`FormatPhoneVerificationProvider`) does:
  *  - normalize formatting (strip spaces, dashes, dots, parens)
  *  - require E.164 shape: a leading "+", a plausible country calling
  *    code (1-3 digits, no leading 0), and a plausible overall length
  *    (E.164 caps subscriber numbers at 15 digits total).
+ *
+ * Milestone 3 Phase 2 completion pass: `verifyPhone` now follows the same
+ * pluggable-provider seam as decisionMakerProvider.ts/companyEnrichment.ts/
+ * emailVerification.ts, reusing providerWaterfall.ts, so a real paid
+ * carrier/line-type lookup (Twilio Lookup, NumVerify, etc.) is a drop-in
+ * upgrade later — prepend it in `buildPhoneVerificationWaterfall` and
+ * `verifyPhone`'s callers don't change at all.
  */
+
+export class NotConfiguredError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "NotConfiguredError";
+  }
+}
 
 export interface PhoneVerificationResult {
   normalized: string | null;
   isPlausibleE164: boolean;
+  /** Which provider in the waterfall actually produced this result (see
+   * buildPhoneVerificationWaterfall) — provenance for the verification
+   * itself, analogous to source_confidence on discovered_contacts. */
+  provider?: string;
 }
 
 /**
@@ -52,10 +73,85 @@ export function isPlausibleE164(value: string): boolean {
   return true;
 }
 
-export function verifyPhone(input: string): PhoneVerificationResult {
-  const normalized = normalizePhone(input);
-  if (!normalized) {
+/** Pluggable backend for `verifyPhone`. Implement this against a real paid
+ * carrier/line-type lookup (Twilio Lookup, NumVerify, etc.) to back
+ * verification with that provider — the rest of the app only ever depends
+ * on this interface. */
+export interface PhoneVerificationProvider {
+  /** Stable, human-readable provider name, recorded as `result.provider`. */
+  readonly name: string;
+  verifyPhone(input: string): Promise<PhoneVerificationResult>;
+}
+
+/**
+ * The real, free implementation available today: format normalization +
+ * E.164 plausibility. Never throws and never returns an empty/null result,
+ * so in the waterfall it is always the one that actually answers unless a
+ * real paid provider is added ahead of it.
+ */
+export class FormatPhoneVerificationProvider implements PhoneVerificationProvider {
+  readonly name = "format_e164";
+
+  async verifyPhone(input: string): Promise<PhoneVerificationResult> {
+    const normalized = normalizePhone(input);
+    if (!normalized) {
+      return { normalized: null, isPlausibleE164: false, provider: this.name };
+    }
+    return { normalized, isPlausibleE164: isPlausibleE164(normalized), provider: this.name };
+  }
+}
+
+/**
+ * Honest stand-in for a licensed carrier/line-type lookup provider we
+ * don't have credentials for in this environment. Always throws — never
+ * returns a fabricated "this number is a real, reachable mobile line"
+ * result. Wire in a real client (implementing `PhoneVerificationProvider`)
+ * once an API key exists.
+ */
+export class NotConfiguredCarrierLookupProvider implements PhoneVerificationProvider {
+  constructor(private readonly providerName = "phone carrier/line-type lookup provider (e.g. Twilio Lookup/NumVerify)") {}
+
+  readonly name = "not_configured";
+
+  async verifyPhone(_input: string): Promise<never> {
+    throw new NotConfiguredError(
+      `${this.providerName} is not configured (no API key available in this environment). ` +
+        `Implement PhoneVerificationProvider against a real provider and add it to the waterfall ` +
+        `once credentials are available. Refusing to fabricate a carrier/line-type result.`,
+    );
+  }
+}
+
+/**
+ * The phone-verification provider waterfall used in production. A real
+ * paid carrier/line-type lookup provider, once credentials exist, is
+ * prepended here — `verifyPhone` below doesn't change at all, since it
+ * only ever depends on the `PhoneVerificationProvider` interface via
+ * `runProviderWaterfall`.
+ */
+export function buildPhoneVerificationWaterfall(): PhoneVerificationProvider[] {
+  return [new NotConfiguredCarrierLookupProvider(), new FormatPhoneVerificationProvider()];
+}
+
+export async function verifyPhone(
+  input: string,
+  providers: PhoneVerificationProvider[] = buildPhoneVerificationWaterfall(),
+): Promise<PhoneVerificationResult> {
+  const outcome = await runProviderWaterfall<string, PhoneVerificationResult>(
+    providers.map((p) => ({ name: p.name, run: (i: string) => p.verifyPhone(i) })),
+    input,
+    // A PhoneVerificationResult object is never null/an array, so the
+    // default isEmpty would already treat it as non-empty — spelled out
+    // here anyway for the same reason as emailVerification.ts.
+    { isEmpty: () => false },
+  );
+
+  if (!outcome.result) {
+    // Unreachable with the default waterfall (FormatPhoneVerificationProvider
+    // never throws); stays an honest, typed fallback for a custom
+    // `providers` list that is empty or all-throwing.
     return { normalized: null, isPlausibleE164: false };
   }
-  return { normalized, isPlausibleE164: isPlausibleE164(normalized) };
+
+  return outcome.result;
 }

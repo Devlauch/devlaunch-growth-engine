@@ -1,5 +1,6 @@
 import pg from "pg";
 import { env } from "../config/env.js";
+import { logger } from "../lib/logger.js";
 
 const { Pool } = pg;
 
@@ -7,6 +8,33 @@ export const pool = new Pool({
   connectionString: env.databaseUrl,
   max: Number(process.env.API_DB_POOL_MAX ?? 10),
 });
+
+/**
+ * Milestone 3 Phase 1 fix: a real tenant-isolation hole was found where this
+ * app connected as a Postgres superuser (`devlaunch`, the Docker image's
+ * bootstrap role) — superusers unconditionally bypass Row-Level Security,
+ * regardless of FORCE ROW LEVEL SECURITY, making every RLS policy in this
+ * codebase a no-op for the API's own connection. Fixed by connecting as the
+ * dedicated `devlaunch_app` role instead (see docker-compose.yml and
+ * packages/db/migrations/321_create_app_role.sql). This check makes that
+ * regression impossible to reintroduce silently: it verifies, at boot,
+ * against the real connected role — not configuration, which could drift
+ * from reality — that RLS genuinely applies. Called once from src/index.ts.
+ */
+export async function assertDatabaseRoleRespectsRls(): Promise<void> {
+  const result = await pool.query<{ rolsuper: boolean; rolbypassrls: boolean; current_user: string }>(
+    "SELECT rolsuper, rolbypassrls, current_user FROM pg_roles WHERE rolname = current_user",
+  );
+  const row = result.rows[0];
+  if (!row) return;
+  if (row.rolsuper || row.rolbypassrls) {
+    const message = `Database role '${row.current_user}' has rolsuper=${row.rolsuper}/rolbypassrls=${row.rolbypassrls} — Row-Level Security tenant isolation is NOT enforced at the database level for this connection. See docker-compose.yml's api service DATABASE_URL comment.`;
+    if (env.nodeEnv === "production") {
+      throw new Error(message);
+    }
+    logger.error({ role: row.current_user, rolsuper: row.rolsuper, rolbypassrls: row.rolbypassrls }, message);
+  }
+}
 
 /**
  * Runs `fn` inside a transaction with no tenant context set — used only

@@ -35,6 +35,16 @@ CREATE TABLE chatbot_conversations (
   consent_record_id        uuid REFERENCES consent_records (id) ON DELETE SET NULL,
   lead_id                  uuid REFERENCES leads (id) ON DELETE SET NULL,
   qualifying_question_index int NOT NULL DEFAULT 0,
+  -- Ordered array of the visitor's literal answers collected while in the
+  -- 'qualifying' stage (one appended per qualifying question answered).
+  -- Stored directly here (rather than reconstructed from chatbot_messages)
+  -- because ambiguous consent retries can add extra visitor messages before
+  -- 'qualifying' even starts, which would otherwise make a message-order
+  -- reconstruction fragile. The first entry becomes leads.qualifying_answer
+  -- (see routes/publicChatbot.ts) -- same column the inbound lead-capture
+  -- widget already writes to (065_add_widget_config_to_projects.sql /
+  -- src/lib/leadIngestion.ts), never a parallel field.
+  qualifying_answers       jsonb NOT NULL DEFAULT '[]'::jsonb,
   visitor_exchange_count   int NOT NULL DEFAULT 0,
   origin                   text,
   started_at               timestamptz NOT NULL DEFAULT now(),

@@ -113,3 +113,30 @@
 ## 3. Mastra placement (explicit, per research findings)
 
 `@mastra/core` is **not** an npm dependency in Phase 1 (current version is a `1.86.0-alpha.3` pre-release; avoid pinning an alpha for a production path, and its full agent-runtime surface is far larger than the one stubbed demo agent Phase 1 needs). The `apps/worker/src/agents/*` layer is written entirely behind `packages/agent-sdk`'s own `AgentDefinition`/`AgentRunRequest`/`AgentRunResult` contract. The diagram's "Mastra stub" box is literally the hand-rolled `market-research` agent module — there is no live Mastra process, client, or import anywhere in Phase 1. A later phase swaps `MockResearchAdapter` (and, separately, the execution engine) behind these same interfaces once `@mastra/core` reaches a stable semver; see `DECISIONS.md`.
+
+## 4. Database connection role (Milestone 3 Phase 1 correction)
+
+Step 4 above ("every DB call ... runs inside a transaction that issues
+`SET LOCAL app.current_tenant_id`") describes the *mechanism* correctly,
+but this document (like every migration's own RLS comments) previously
+implied that mechanism was sufficient on its own. It is not, if the
+connecting role is a Postgres superuser: superusers unconditionally bypass
+Row-Level Security regardless of `SET LOCAL app.current_tenant_id` or
+`FORCE ROW LEVEL SECURITY`. This was found to be the case for this
+platform's actual deployment (the app connected as `devlaunch`, the
+Postgres Docker image's bootstrap superuser) during Milestone 3 Phase 1
+real-world testing — see `docs/SECURITY_REVIEW.md`'s "RLS bypass" entry
+for the full finding and fix.
+
+**Current, corrected architecture**: `apps/api` and `apps/worker` connect
+as a dedicated, non-superuser `devlaunch_app` role (created by
+`packages/db/migrations/321_create_app_role.sql`, wired via
+`docker-compose.yml`'s `api`/`worker` services' `DATABASE_URL`). Migrations
+still run as the original `devlaunch` superuser (genuinely needed for
+arbitrary DDL). Both apps run a startup check
+(`assertDatabaseRoleRespectsRls()` in `apps/api/src/db/pool.ts` /
+`apps/worker/src/db.ts`) that queries `pg_roles` for the actual connected
+role at boot and refuses to start silently if it's ever a superuser/
+bypassrls role again — a loud error in development, a hard exit in
+`NODE_ENV=production`. This makes step 4's RLS-based isolation claim
+actually true for the first time, rather than aspirational.

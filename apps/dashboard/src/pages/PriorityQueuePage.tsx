@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { Layout } from "../components/Layout";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorBanner } from "../components/ErrorBanner";
@@ -129,7 +129,9 @@ export function PriorityQueuePage() {
   function renderLeadRow(lead: QueueLead) {
     return (
       <tr key={lead.id}>
-        <td>{lead.name ?? "—"}</td>
+        <td>
+          <Link to={`/tenants/${tenantId}/projects/${projectId}/leads/${lead.id}`}>{lead.name ?? "—"}</Link>
+        </td>
         <td>{lead.email ?? "—"}</td>
         <td>{lead.company ?? "—"}</td>
         <td>

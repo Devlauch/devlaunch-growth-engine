@@ -1,0 +1,136 @@
+# OPT-IN ONLY — additive Compose override for the Listmonk integration
+# (Milestone 2, Agent B — see docs/INTEGRATION_STATUS.md's Agent B row and
+# docs/OPEN_SOURCE_INTEGRATION_AUDIT.md's "listmonk" section). Deliberately
+# a SEPARATE file rather than an addition to the main docker-compose.yml:
+# every Milestone 2 integration agent (Listmonk/Chatwoot/Postiz) adds its
+# own independent service, and editing one shared docker-compose.yml from
+# three concurrent changes would collide. Follows the exact "opt-in
+# profile, ${VAR:-default} env vars, healthcheck" convention the main
+# docker-compose.yml already uses for its `crawl4ai` service — see that
+# file's `crawl4ai:` block for the precedent this mirrors.
+#
+# Tenant-mapping / DB-placement decision (documented in full in
+# docs/INTEGRATION_STATUS.md's Agent B row): listmonk gets its OWN
+# dedicated Postgres container (`listmonk-db` below), not platform's main
+# `postgres` service. The audit note that listmonk "can share the same
+# Postgres *server* as platform, not its schema/tables" is a valid
+# alternative, but this change picks a fully separate container instead:
+# (a) zero risk of listmonk's own connection-pool/migration load
+# contending with platform's primary tenant database, which every other
+# agent's tests and the running API also depend on; (b) listmonk is
+# AGPLv3 and run as a genuinely independent service per the audit — giving
+# it its own DB instance keeps that boundary physically clean, not just
+# logical; (c) the operational cost is trivial (one more small Postgres
+# container) given listmonk's own footprint is already the lightest
+# candidate in the whole audit.
+#
+# This file defines its OWN Docker network key implicitly — because it
+# does not set `networks:` on each service, Compose attaches them to the
+# project's default network. When launched TOGETHER with the main
+# docker-compose.yml (see the invocation below), both files are merged
+# into one Compose project and therefore share one default network, which
+# is how apps/api (running in the `api` service from the main file) can
+# reach `http://listmonk:9000` by service name.
+#
+# Usage (nothing here starts with a plain `docker compose up`):
+#   cp .env.listmonk.example .env.listmonk
+#   # edit .env.listmonk — set LISTMONK_ADMIN_USER/LISTMONK_ADMIN_PASSWORD
+#   docker compose -f docker-compose.yml -f docker-compose.listmonk.yml \
+#     --env-file .env.listmonk --profile listmonk up -d listmonk-db listmonk
+#
+# Then, from the dashboard: Integrations -> Listmonk -> Connect, using
+#   baseUrl: http://localhost:${LISTMONK_PORT:-9000}  (or http://listmonk:9000
+#     from inside another container on the same Compose network)
+#   apiUser / apiKey: created in listmonk's own admin UI (Settings -> Users
+#     -> create an API-only user, or use the bootstrap admin user) — this
+#     platform never ships a default listmonk credential.
+#
+# NOT independently verified against a live container in this change
+# (unlike docs/CRAWL4AI_VERIFICATION.md's crawl4ai verification session —
+# no Docker runtime was available in this environment). The image tag,
+# env var names, and command sequence below were taken directly from the
+# read-only reference clone's own docker-compose.yml
+# (~/project/Growth/listmonk/docker-compose.yml) rather than guessed, but
+# an operator should do one real `docker compose ... up` + a manual
+# `GET /api/health` check before relying on this in production — see the
+# "What's tested vs. what needs a real credential" section of this
+# feature's docs/INTEGRATION_STATUS.md entry.
+services:
+  listmonk-db:
+    image: postgres:17-alpine
+    profiles: ["listmonk"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${LISTMONK_DB_USER:-listmonk}
+      POSTGRES_PASSWORD: ${LISTMONK_DB_PASSWORD:-listmonk}
+      POSTGRES_DB: ${LISTMONK_DB_NAME:-listmonk}
+    volumes:
+      - devlaunch_listmonk_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${LISTMONK_DB_USER:-listmonk} -d ${LISTMONK_DB_NAME:-listmonk}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  listmonk:
+    image: listmonk/listmonk:v5.0.2
+    profiles: ["listmonk"]
+    restart: unless-stopped
+    depends_on:
+      listmonk-db:
+        condition: service_healthy
+    # Exact bootstrap command from the reference clone's own
+    # docker-compose.yml: --install --idempotent is safe to run on every
+    # start (only installs on a genuinely empty DB), --upgrade applies any
+    # pending migrations when the image is bumped, and --config '' means
+    # listmonk takes ALL config from the LISTMONK_* env vars below rather
+    # than a mounted config.toml.
+    command: [sh, -c, "./listmonk --install --idempotent --yes --config '' && ./listmonk --upgrade --yes --config '' && ./listmonk --config ''"]
+    environment:
+      LISTMONK_app__address: 0.0.0.0:9000
+      LISTMONK_db__user: ${LISTMONK_DB_USER:-listmonk}
+      LISTMONK_db__password: ${LISTMONK_DB_PASSWORD:-listmonk}
+      LISTMONK_db__database: ${LISTMONK_DB_NAME:-listmonk}
+      LISTMONK_db__host: listmonk-db
+      LISTMONK_db__port: 5432
+      LISTMONK_db__ssl_mode: disable
+      LISTMONK_db__max_open: 25
+      LISTMONK_db__max_idle: 25
+      LISTMONK_db__max_lifetime: 300s
+      TZ: Etc/UTC
+      # Only set during the FIRST `docker compose up` on an empty DB — if
+      # both are set, listmonk auto-creates the Super Admin user;
+      # otherwise it's created via the web UI on first visit. No default
+      # baked in here on purpose (same convention as CRAWL4AI_API_TOKEN in
+      # the main docker-compose.yml) — an operator must consciously set
+      # these in .env.listmonk.
+      LISTMONK_ADMIN_USER: ${LISTMONK_ADMIN_USER:-}
+      LISTMONK_ADMIN_PASSWORD: ${LISTMONK_ADMIN_PASSWORD:-}
+    ports:
+      - "${LISTMONK_PORT:-9000}:9000"
+    volumes:
+      - devlaunch_listmonk_uploads:/listmonk/uploads
+    healthcheck:
+      # NOTE (real-world verification, Milestone 3 Phase 1): the obvious
+      # choice, /api/health, is NOT a public endpoint in listmonk v5.0.2 —
+      # confirmed against a real running container: it returns
+      # `403 {"message":"invalid session"}` to an unauthenticated request
+      # (and `403 {"message":"invalid API credentials"}` to a bad
+      # Authorization header), which a bare `wget` always reports as a
+      # failure, in turn making the container "unhealthy" forever even
+      # though the app is genuinely up and correctly serving requests. A
+      # real listmonk API credential (what apps/api's listmonkClient.ts
+      # uses) DOES get a real `200 {"data":true}` from /api/health — that
+      # was verified directly too — but Compose healthchecks have no
+      # per-integration tenant credential to use. /admin/login is the
+      # public, unauthenticated page listmonk serves regardless of DB/app
+      # state, so it's used here purely as an HTTP-reachability probe
+      # (confirmed: real `wget --spider` against a live container exits 0).
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:9000/admin/login || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  devlaunch_listmonk_db_data:
+  devlaunch_listmonk_uploads:

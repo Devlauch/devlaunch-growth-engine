@@ -11,10 +11,15 @@ import {
   getConnector,
   UnsupportedIndustryError,
   type ConnectorConfig,
-  type DiscoveredContact as ConnectorDiscoveredContact,
 } from "@devlaunch/agent-sdk";
-import { findDecisionMakers } from "../lib/decisionMakerProvider.js";
 import { organizationsToCsv, contactsToCsv } from "../lib/prospectExport.js";
+import {
+  SUPPORTED_CONNECTOR_TYPES as DISCOVERY_RUN_SUPPORTED_CONNECTOR_TYPES,
+  persistDiscoveryResult,
+  runDiscoveryWaterfall,
+  lookupAndCacheDecisionMakers as sharedLookupAndCacheDecisionMakers,
+  type DiscoverySourceRow,
+} from "../lib/discoveryRun.js";
 
 /**
  * Only 'public_directory' (backed by PublicDirectoryConnector /
@@ -25,8 +30,12 @@ import { organizationsToCsv, contactsToCsv } from "../lib/prospectExport.js";
  * service; 'csv_upload' and 'licensed_api' have no UI/route wiring yet.
  * Creating a source of any other connector_type is rejected outright
  * rather than accepted and left to fail confusingly at run time.
+ *
+ * Re-exported from lib/discoveryRun.ts (single source of truth, so the new
+ * multi-source waterfall run and the single-source /:id/run endpoint below
+ * can never silently drift apart on which connector types are approved).
  */
-const SUPPORTED_CONNECTOR_TYPES = ["public_directory"] as const;
+const SUPPORTED_CONNECTOR_TYPES = DISCOVERY_RUN_SUPPORTED_CONNECTOR_TYPES;
 /** The SourceConnector registry id the 'public_directory' connector_type maps to. */
 const PUBLIC_DIRECTORY_CONNECTOR_ID = "public-directory";
 
@@ -52,13 +61,10 @@ async function loadOrganizationOr404(req: Request, organizationId: string) {
 }
 
 /**
- * Runs the decision-maker provider waterfall (decisionMakerProvider.ts) for
- * one organization and upserts the outcome into decision_maker_cache (one
- * row per organization — a fresh lookup replaces the prior cached one).
- * `findDecisionMakers` itself never throws (every honest failure mode is
- * caught internally and classified as part of the outcome), so this never
- * aborts a caller's larger flow (e.g. a discovery-source run persisting
- * several organizations) over a decision-maker lookup.
+ * Thin per-request wrapper around lib/discoveryRun.ts's shared
+ * lookupAndCacheDecisionMakers (which takes tenantDb/tenantId directly so
+ * it's reusable outside of an Express request, e.g. from
+ * prospectingCampaigns.ts).
  */
 async function lookupAndCacheDecisionMakers(
   req: Request,
@@ -66,27 +72,13 @@ async function lookupAndCacheDecisionMakers(
   organizationName: string,
   domain: string | null,
 ) {
-  const outcome = await findDecisionMakers({ organizationName, domain });
-  const result = await req.tenantDb!.query(
-    `INSERT INTO decision_maker_cache (tenant_id, organization_id, provider, status, contacts, attempts, looked_up_at)
-     VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, now())
-     ON CONFLICT (organization_id) DO UPDATE SET
-       provider = EXCLUDED.provider,
-       status = EXCLUDED.status,
-       contacts = EXCLUDED.contacts,
-       attempts = EXCLUDED.attempts,
-       looked_up_at = EXCLUDED.looked_up_at
-     RETURNING *`,
-    [
-      req.tenantId,
-      organizationId,
-      outcome.provider,
-      outcome.status,
-      JSON.stringify(outcome.contacts),
-      JSON.stringify(outcome.attempts),
-    ],
+  return sharedLookupAndCacheDecisionMakers(
+    req.tenantDb!,
+    req.tenantId as string,
+    organizationId,
+    organizationName,
+    domain,
   );
-  return result.rows[0];
 }
 
 // ---------------------------------------------------------------------------
@@ -302,133 +294,11 @@ discoverySourcesRouter.post("/:id/run", async (req, res, next) => {
       );
     }
 
-    let organizationsCreated = 0;
-    let organizationsDuplicate = 0;
-    let contactsCreated = 0;
-    let contactsDuplicate = 0;
-    const persistedOrganizations: unknown[] = [];
-
-    for (const org of discovery.organizations) {
-      const duplicate = await findDuplicateOrganization(req.tenantDb!, projectId, {
-        domain: org.domain,
-        name: org.name,
-      });
-
-      let orgRow: Record<string, unknown>;
-      if (duplicate) {
-        organizationsDuplicate += 1;
-        const existing = await req.tenantDb!.query(
-          `SELECT * FROM discovered_organizations WHERE id = $1 AND tenant_id = $2`,
-          [duplicate.id, req.tenantId],
-        );
-        orgRow = existing.rows[0];
-      } else {
-        const normalizedDomain = normalizeDomain(org.domain);
-        const normalizedName = normalizeOrgName(org.name);
-        const inserted = await req.tenantDb!.query(
-          `INSERT INTO discovered_organizations
-             (tenant_id, project_id, discovery_source_id, name, domain, normalized_domain, normalized_name, source_url, raw_metadata, discovered_at, source_confidence)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11)
-           ON CONFLICT (tenant_id, project_id, normalized_domain) WHERE normalized_domain IS NOT NULL DO NOTHING
-           RETURNING *`,
-          [
-            req.tenantId,
-            projectId,
-            sourceId,
-            org.name,
-            org.domain ?? null,
-            normalizedDomain,
-            normalizedName,
-            org.sourceUrl,
-            JSON.stringify(org.rawMetadata ?? {}),
-            org.discoveredAt,
-            // A connector-sourced row is a direct listing from the source
-            // (the public_directory/Overpass connector today) — a stronger
-            // signal than a human-entered manual-create row (which defaults
-            // to 'unconfirmed', see POST /discovered-organizations below).
-            "verified",
-          ],
-        );
-        if (inserted.rowCount && inserted.rowCount > 0) {
-          organizationsCreated += 1;
-          orgRow = inserted.rows[0];
-        } else {
-          // Lost a race against a concurrent run inserting the same
-          // domain — re-fetch the row that won instead of erroring.
-          organizationsDuplicate += 1;
-          const winner = await req.tenantDb!.query(
-            `SELECT * FROM discovered_organizations WHERE tenant_id = $1 AND project_id = $2 AND normalized_domain = $3`,
-            [req.tenantId, projectId, normalizedDomain],
-          );
-          orgRow = winner.rows[0];
-        }
-      }
-
-      const orgContacts: ConnectorDiscoveredContact[] = discovery.contacts[org.name] ?? [];
-      for (const contact of orgContacts) {
-        const contactDuplicate = await findDuplicateContact(req.tenantDb!, orgRow.id as string, {
-          email: contact.email,
-          name: contact.name,
-        });
-        if (contactDuplicate) {
-          contactsDuplicate += 1;
-          continue;
-        }
-
-        const normalizedEmail = normalizeEmail(contact.email);
-        const normalizedPhone = contact.phone ? normalizePhone(contact.phone) : null;
-        let verificationStatus = "unverified";
-        let emailVerification: Record<string, unknown> = {};
-        if (contact.email) {
-          const verification = await verifyEmail(contact.email);
-          verificationStatus = verification.verificationStatus;
-          emailVerification = verification as unknown as Record<string, unknown>;
-        }
-
-        const insertedContact = await req.tenantDb!.query(
-          `INSERT INTO discovered_contacts
-             (tenant_id, organization_id, name, role_title, email, normalized_email, phone, contact_channel, verification_status, email_verification, source_url, source_confidence)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12)
-           ON CONFLICT (organization_id, normalized_email) WHERE normalized_email IS NOT NULL DO NOTHING
-           RETURNING id`,
-          [
-            req.tenantId,
-            orgRow.id,
-            contact.name ?? null,
-            contact.roleTitle ?? null,
-            contact.email ?? null,
-            normalizedEmail,
-            normalizedPhone ?? contact.phone ?? null,
-            contact.contactChannel,
-            verificationStatus,
-            JSON.stringify(emailVerification),
-            contact.sourceUrl ?? null,
-            // Same reasoning as discovered_organizations above: a direct
-            // connector-sourced contact.
-            "verified",
-          ],
-        );
-        if (insertedContact.rowCount && insertedContact.rowCount > 0) {
-          contactsCreated += 1;
-        } else {
-          contactsDuplicate += 1;
-        }
-      }
-
-      // Decision-maker search (feature: Advanced Prospect Discovery). Never
-      // throws — see lookupAndCacheDecisionMakers — so one organization's
-      // lookup outcome (today, always "not_configured": no licensed
-      // decision-maker provider is wired up in this environment) can never
-      // abort the rest of this run.
-      const decisionMakerLookup = await lookupAndCacheDecisionMakers(
-        req,
-        orgRow.id as string,
-        orgRow.name as string,
-        (orgRow.domain as string | null) ?? null,
-      );
-
-      persistedOrganizations.push({ ...orgRow, decisionMakerLookup });
-    }
+    // Delegates to lib/discoveryRun.ts's shared persistDiscoveryResult — the
+    // same dedup-first insert-or-reuse logic, now also used by the
+    // multi-source waterfall run below and by prospectingCampaigns.ts, so
+    // there is exactly one place this logic lives.
+    const summary = await persistDiscoveryResult(req.tenantDb!, req.tenantId as string, projectId, sourceId, discovery);
 
     await req.tenantDb!.query(
       `INSERT INTO audit_events (tenant_id, actor_type, actor_user_id, action, entity_type, entity_id, metadata)
@@ -437,17 +307,142 @@ discoverySourcesRouter.post("/:id/run", async (req, res, next) => {
         req.tenantId,
         req.userId,
         sourceId,
-        JSON.stringify({ organizationsFound: discovery.organizations.length, organizationsCreated, organizationsDuplicate }),
+        JSON.stringify({
+          organizationsFound: summary.organizationsFound,
+          organizationsCreated: summary.organizationsCreated,
+          organizationsDuplicate: summary.organizationsDuplicate,
+        }),
+      ],
+    );
+
+    res.status(200).json(summary);
+  } catch (err) {
+    next(err);
+  }
+});
+
+const runWaterfallSchema = z.object({
+  // Source ids, in the priority order to try them. Defaults to every
+  // enabled, supported-connector-type source in the project, ordered by
+  // creation date, when omitted.
+  sourceIds: z.array(z.string().uuid()).min(1).max(20).optional(),
+  industry: z.string().trim().min(1).max(100).optional(),
+  geography: z.string().trim().min(1).max(200).optional(),
+  limit: z.number().int().positive().max(100).optional(),
+  // Targets this run using an accepted ICP profile's firmographics
+  // (industries[0]/geographies[0]) as the industry/geography search input,
+  // unless the caller's own industry/geography above override it. This is
+  // the "a discovery run actually uses an accepted ICP profile to target
+  // its search" loop closure — see lib/discoveryRun.ts's
+  // resolveIcpTargeting doc comment for exactly what's derived and why
+  // nothing from icpMatching.ts (lead-to-ICP scoring, a different concern)
+  // is duplicated here.
+  icpProfileId: z.string().uuid().optional(),
+});
+
+/**
+ * POST /discovery-sources/run
+ *
+ * The configurable multi-provider discovery run Milestone 3 Phase 2 asked
+ * for: tries several configured discovery_sources, in priority order
+ * (request-supplied order, or creation order by default), via the EXISTING
+ * generic runProviderWaterfall (lib/providerWaterfall.ts — the same
+ * orchestrator decisionMakerProvider.ts already uses), and persists
+ * whichever source's result actually answered, recording which one that was
+ * (`answeredBySourceId`/`answeredBySourceName`) plus every attempt made
+ * (`attempts`) — never fabricating a result when every source came back
+ * empty or errored. A source that's disabled, unsupported, or whose
+ * connector throws is recorded as a failed attempt and the waterfall moves
+ * on, exactly like decisionMakerProvider.ts's own behavior.
+ */
+discoverySourcesRouter.post("/run", async (req, res, next) => {
+  try {
+    const projectId = paramId(req, "projectId");
+    await assertProjectInTenant(req, projectId);
+    const body = runWaterfallSchema.parse(req.body ?? {});
+
+    let sources: DiscoverySourceRow[];
+    if (body.sourceIds && body.sourceIds.length > 0) {
+      const result = await req.tenantDb!.query(
+        `SELECT * FROM discovery_sources WHERE tenant_id = $1 AND project_id = $2 AND id = ANY($3::uuid[])`,
+        [req.tenantId, projectId, body.sourceIds],
+      );
+      // Preserve the caller's requested priority order rather than
+      // whatever order the DB happened to return rows in.
+      const byId = new Map(result.rows.map((r: DiscoverySourceRow) => [r.id, r]));
+      sources = body.sourceIds.map((id) => byId.get(id)).filter((s): s is DiscoverySourceRow => Boolean(s));
+      if (sources.length !== body.sourceIds.length) {
+        throw Errors.badRequest("One or more sourceIds do not belong to this project");
+      }
+    } else {
+      const result = await req.tenantDb!.query(
+        `SELECT * FROM discovery_sources
+         WHERE tenant_id = $1 AND project_id = $2 AND enabled = true
+         ORDER BY created_at ASC`,
+        [req.tenantId, projectId],
+      );
+      sources = result.rows;
+    }
+
+    if (sources.length === 0) {
+      throw Errors.badRequest("No enabled discovery sources are configured for this project");
+    }
+
+    let industry = body.industry;
+    let geography = body.geography;
+    if (body.icpProfileId && (industry === undefined || geography === undefined)) {
+      const icpResult = await req.tenantDb!.query(
+        `SELECT firmographics FROM icp_profiles WHERE id = $1 AND tenant_id = $2 AND project_id = $3`,
+        [body.icpProfileId, req.tenantId, projectId],
+      );
+      if (icpResult.rowCount === 0) throw Errors.badRequest("icpProfileId does not belong to this project");
+      const firmographics = (icpResult.rows[0].firmographics ?? {}) as {
+        industries?: string[];
+        geographies?: string[];
+      };
+      if (industry === undefined) industry = firmographics.industries?.[0];
+      if (geography === undefined) {
+        const candidate = firmographics.geographies?.[0];
+        // recommendIcp's own placeholder for "no geography detected" —
+        // never pass this through to a connector as a real search term.
+        geography = candidate && !candidate.startsWith("Global (") ? candidate : undefined;
+      }
+    }
+
+    const waterfall = await runDiscoveryWaterfall(sources, { industry, geography, limit: body.limit });
+
+    const summary = waterfall.result
+      ? await persistDiscoveryResult(
+          req.tenantDb!,
+          req.tenantId as string,
+          projectId,
+          waterfall.answeredBySourceId as string,
+          waterfall.result,
+        )
+      : { organizationsFound: 0, organizationsCreated: 0, organizationsDuplicate: 0, contactsCreated: 0, contactsDuplicate: 0, organizations: [] };
+
+    await req.tenantDb!.query(
+      `INSERT INTO audit_events (tenant_id, actor_type, actor_user_id, action, entity_type, entity_id, metadata)
+       VALUES ($1, 'user', $2, 'discovery_source.run_waterfall', 'discovery_source', $3, $4::jsonb)`,
+      [
+        req.tenantId,
+        req.userId,
+        waterfall.answeredBySourceId ?? sources[0].id,
+        JSON.stringify({
+          sourcesAttempted: sources.map((s) => s.id),
+          answeredBySourceId: waterfall.answeredBySourceId,
+          attempts: waterfall.attempts,
+          organizationsFound: summary.organizationsFound,
+          organizationsCreated: summary.organizationsCreated,
+        }),
       ],
     );
 
     res.status(200).json({
-      organizationsFound: discovery.organizations.length,
-      organizationsCreated,
-      organizationsDuplicate,
-      contactsCreated,
-      contactsDuplicate,
-      organizations: persistedOrganizations,
+      ...summary,
+      answeredBySourceId: waterfall.answeredBySourceId,
+      answeredBySourceName: waterfall.answeredBySourceName,
+      attempts: waterfall.attempts,
     });
   } catch (err) {
     next(err);

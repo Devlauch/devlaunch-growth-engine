@@ -5,6 +5,7 @@ import { withTenantContext } from "../db.js";
 import { loadReportData } from "./reportQueries.js";
 import { generateReportPdf } from "./generateReportPdf.js";
 import { saveReportFile, reportRelativePath } from "./reportFileStore.js";
+import { processGrowthAuditReport } from "./growthAuditReportWorker.js";
 import { logger } from "../logger.js";
 
 /**
@@ -20,6 +21,15 @@ import { logger } from "../logger.js";
  * limitation note.
  */
 export async function processReportGeneration(job: Job<ReportGenerationJobData>): Promise<void> {
+  // Additive branch (see packages/agent-sdk's ReportGenerationJobData doc
+  // comment + growthAuditReportWorker.ts): every pre-existing call site
+  // never sets `kind`, so this falls through to the original client-summary
+  // behavior below completely unchanged.
+  if (job.data.kind === "growth_audit") {
+    await processGrowthAuditReport(job);
+    return;
+  }
+
   const { reportId, tenantId, projectId, scheduleId, periodStart, periodEnd } = job.data;
   const log = logger.child({ reportId, tenantId, projectId, jobId: job.id });
 

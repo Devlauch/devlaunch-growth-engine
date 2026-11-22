@@ -44,7 +44,18 @@ services:
     environment:
       NODE_ENV: ${NODE_ENV:-development}
       PORT: 4000
-      DATABASE_URL: postgres://${POSTGRES_USER:-devlaunch}:${POSTGRES_PASSWORD:-devlaunch}@postgres:5432/${POSTGRES_DB:-devlaunch_dev}
+      # Milestone 3 Phase 1 fix: the api/worker services connect as the real,
+      # non-superuser `devlaunch_app` role (packages/db/migrations/
+      # 321_create_app_role.sql) — NOT as POSTGRES_USER, which is the
+      # Postgres Docker image's bootstrap superuser (rolsuper=true,
+      # rolbypassrls=true). Postgres unconditionally bypasses RLS for
+      # superusers, so every prior "FORCE ROW LEVEL SECURITY" migration
+      # comment's safety claim was never actually enforced for this app's
+      # own connection until this change. See docs/SECURITY_REVIEW.md's
+      # "RLS bypass" entry for the full writeup. POSTGRES_USER/PASSWORD
+      # remain the migration-running/table-owning role (packages/db's
+      # `npm run migrate:up`, invoked separately, still needs that).
+      DATABASE_URL: postgres://${APP_DB_USER:-devlaunch_app}:${APP_DB_PASSWORD:-devlaunch_app_dev_only_change_me}@postgres:5432/${POSTGRES_DB:-devlaunch_dev}
       REDIS_URL: redis://redis:6379
       ALLOW_DEV_AUTH: ${ALLOW_DEV_AUTH:-true}
       JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-dev-insecure-access-secret-change-me}
@@ -57,6 +68,25 @@ services:
       # that writes into it — apps/api only reads, via the authenticated
       # GET .../reports/:id/download route).
       REPORT_FILES_DIR: /data/report_files
+      # Integrations (Milestone 2 shared foundation, apps/api/src/lib/
+      # credentialEncryption.ts) — AES-256-GCM key protecting every
+      # listmonk/chatwoot/postiz credential stored in integrations.
+      # encrypted_credential_ref. Left blank (no insecure fallback, unlike
+      # the JWT dev secrets above) rather than ever defaulting to a value
+      # that would let a real third-party secret be "encrypted" with a
+      # known key.
+      INTEGRATION_CREDENTIALS_KEY: ${INTEGRATION_CREDENTIALS_KEY:-}
+      # Chatwoot (apps/api/src/lib/chatwootClient.ts / chatwootWebhooks.ts):
+      # single-shared-instance env-var fallback, used only when a tenant/
+      # project hasn't connected its own per-tenant credential yet (see
+      # .env.chatwoot.example's own doc comment). `chatwoot` below is this
+      # compose project's own service name on the shared `devlaunch_default`
+      # network, reachable from the api container when the chatwoot
+      # profile is also up.
+      CHATWOOT_BASE_URL: ${CHATWOOT_BASE_URL:-http://chatwoot:3000}
+      CHATWOOT_ACCOUNT_ID: ${CHATWOOT_ACCOUNT_ID:-}
+      CHATWOOT_API_ACCESS_TOKEN: ${CHATWOOT_API_ACCESS_TOKEN:-}
+      CHATWOOT_WEBHOOK_SECRET: ${CHATWOOT_WEBHOOK_SECRET:-}
     ports:
       - "${API_PORT:-4000}:4000"
     volumes:
@@ -79,7 +109,9 @@ services:
         condition: service_healthy
     environment:
       NODE_ENV: ${NODE_ENV:-development}
-      DATABASE_URL: postgres://${POSTGRES_USER:-devlaunch}:${POSTGRES_PASSWORD:-devlaunch}@postgres:5432/${POSTGRES_DB:-devlaunch_dev}
+      # See the `api` service's own comment above — same non-superuser
+      # devlaunch_app role, same reasoning.
+      DATABASE_URL: postgres://${APP_DB_USER:-devlaunch_app}:${APP_DB_PASSWORD:-devlaunch_app_dev_only_change_me}@postgres:5432/${POSTGRES_DB:-devlaunch_dev}
       REDIS_URL: redis://redis:6379
       LOG_LEVEL: ${LOG_LEVEL:-info}
       # Only set/used if the optional `crawl4ai` profile service (below) is

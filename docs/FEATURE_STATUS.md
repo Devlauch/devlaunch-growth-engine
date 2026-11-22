@@ -1,7 +1,27 @@
 # Feature Status — single source of truth
 
 **Last updated:** 2026-11-22
-**Updated by:** Claude (Milestone 3 Phase 1 — real-world smoke testing of
+**Updated by:** Claude (Milestone 3 Phase 2.5 — added two new features:
+**AI Growth Advisor** (`growth_advisor_recommendations`/`growth_advisor_actions`,
+migrations 432-436, `apps/api/src/lib/growthAdvisor.ts` /
+`routes/growthAdvisor.ts`, dashboard `GrowthAdvisorPage.tsx`) — 5 real,
+data-backed recommendation rules (invalid-email rate, unassigned leads, weak
+landing-page conversion, qualified-leads-not-converting, unresolved
+high-severity SEO issues), each with a real minimum sample size, plus one
+approval-gated action (auto-assign unassigned leads, reusing
+`leadPromotion.ts`'s round-robin, gated through the existing `approvals`
+table) — and **DevLaunch's own internal customer-acquisition workspace**
+(migrations 421-427, `publicGrowth.ts`/`internalGrowth.ts` routes, dashboard
+`AcquisitionWorkspacePage.tsx`) — a dedicated, RLS-isolated internal
+tenant/project with public unauthenticated growth-audit and demo-request
+capture (real crawl via `growthAnalyzer.ts`, real lead ingestion, per-IP
+rate-limited), trial-signup tracking, and CAC math that returns
+"insufficient_data" rather than a masked zero. Both reuse existing
+infrastructure (report pipeline, RBAC, audit_events, approvals, sequences/
+deals) rather than rebuilding it. Routers mounted in `app.ts`, dashboard
+routes/nav wired in `App.tsx`/`Layout.tsx`. Full `apps/api` suite verified
+green after reconciliation: 994/1002 passing, 8 honest pre-existing skips.
+See prior entry below for Milestone 3 Phase 1 — real-world smoke testing of
 Listmonk/Chatwoot/Postiz against genuinely running containers; fixed a
 critical platform-wide RLS-bypass finding and a route-shadowing bug; see
 `docs/MILESTONE_3_REPORT.md` for the full report)

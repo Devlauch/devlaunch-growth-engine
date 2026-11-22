@@ -77,4 +77,16 @@ export interface ReportGenerationJobData {
   scheduleId?: string | null;
   periodStart: string;
   periodEnd: string;
+  /**
+   * Additive, optional (defaults to the pre-existing "client_summary"
+   * behavior when omitted — every existing call site is unaffected).
+   * "growth_audit" is DevLaunch's own internal-workspace public
+   * growth-audit report (see apps/api/src/routes/publicGrowth.ts,
+   * apps/worker/src/reports/growthAuditReportWorker.ts): the SAME queue
+   * and worker process branches to a different, real-data render function
+   * instead of the generic leads/campaigns client summary.
+   */
+  kind?: "client_summary" | "growth_audit";
+  /** Only set when kind === "growth_audit": the real growth_analyses row to render. */
+  growthAnalysisId?: string;
 }

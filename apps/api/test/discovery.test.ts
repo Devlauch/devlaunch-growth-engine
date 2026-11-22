@@ -365,6 +365,10 @@ describe("discovery-sources run endpoint", () => {
         rowCount: 1,
         rows: [{ id: ORG_1, name: "Springfield Diner", domain: "springfielddiner.example" }],
       }, // INSERT discovered_organizations
+      {
+        rowCount: 1,
+        rows: [{ id: "dmc-1", organization_id: ORG_1, status: "not_configured", provider: null, contacts: [] }],
+      }, // decision_maker_cache upsert
       undefined, // INSERT audit_events
     ]);
 
@@ -385,6 +389,140 @@ describe("discovery-sources run endpoint", () => {
       ([sql]) => typeof sql === "string" && sql.includes("INSERT INTO discovered_organizations"),
     );
     expect(insertCall).toBeDefined();
+
+    // Every persisted organization from a /run gets a real connector-sourced
+    // row (source_confidence = 'verified') and a real (even if "not
+    // configured") decision-maker lookup outcome recorded against it —
+    // never silently skipped.
+    expect(insertCall?.[1]).toContain("verified");
+    expect(res.body.organizations[0].decisionMakerLookup).toMatchObject({ status: "not_configured" });
+
+    const decisionMakerCacheCall = queryMock.mock.calls.find(
+      ([sql]) => typeof sql === "string" && sql.includes("INSERT INTO decision_maker_cache"),
+    );
+    expect(decisionMakerCacheCall).toBeDefined();
+  });
+});
+
+describe("POST /discovery-sources/run (multi-provider waterfall)", () => {
+  const SOURCE_1 = "77777777-7777-7777-7777-777777777777";
+  const SOURCE_2 = "99999999-9999-9999-9999-999999999999";
+  const ICP_1 = "44444444-4444-4444-4444-444444444444";
+
+  it("tries configured sources in priority order and reports which one answered", async () => {
+    const app = buildApp();
+    // First source (SOURCE_1) comes back empty, second (SOURCE_2) answers.
+    discoverMock
+      .mockResolvedValueOnce({ organizations: [], contacts: {} })
+      .mockResolvedValueOnce({
+        organizations: [
+          {
+            name: "Acme Inc",
+            domain: "acme.com",
+            sourceUrl: "https://acme.com",
+            discoveredAt: new Date().toISOString(),
+            rawMetadata: {},
+          },
+        ],
+        contacts: {},
+      });
+
+    queueResponses([
+      ...mockMembership(),
+      { rowCount: 1, rows: [{}] }, // project exists
+      {
+        rowCount: 2,
+        rows: [
+          { id: SOURCE_1, connector_type: "public_directory", name: "Source A", enabled: true, rate_limit_per_minute: 10, terms_note: null, config: {} },
+          { id: SOURCE_2, connector_type: "public_directory", name: "Source B", enabled: true, rate_limit_per_minute: 10, terms_note: null, config: {} },
+        ],
+      }, // sources by id, in requested order
+      { rowCount: 0, rows: [] }, // findDuplicateOrganization: by domain
+      { rowCount: 0, rows: [] }, // findDuplicateOrganization: by name fallback
+      { rowCount: 1, rows: [{ id: ORG_1, name: "Acme Inc", domain: "acme.com" }] }, // INSERT discovered_organizations
+      { rowCount: 1, rows: [{ id: "dmc-1", status: "not_configured" }] }, // decision_maker_cache upsert
+      undefined, // INSERT audit_events
+    ]);
+
+    const res = await request(app)
+      .post(`/api/v1/tenants/${TENANT_A}/projects/${PROJECT_1}/discovery-sources/run`)
+      .set("X-Dev-User-Id", USER_1)
+      .send({ sourceIds: [SOURCE_1, SOURCE_2] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.answeredBySourceId).toBe(SOURCE_2);
+    expect(res.body.answeredBySourceName).toBe("Source B");
+    expect(res.body.attempts).toHaveLength(2);
+    expect(res.body.organizationsCreated).toBe(1);
+  });
+
+  it("returns a zeroed, honest summary (never fabricated) when every source comes back empty", async () => {
+    const app = buildApp();
+    discoverMock.mockResolvedValueOnce({ organizations: [], contacts: {} });
+
+    queueResponses([
+      ...mockMembership(),
+      { rowCount: 1, rows: [{}] }, // project exists
+      {
+        rowCount: 1,
+        rows: [{ id: SOURCE_1, connector_type: "public_directory", name: "Source A", enabled: true, rate_limit_per_minute: 10, terms_note: null, config: {} }],
+      },
+    ]);
+
+    const res = await request(app)
+      .post(`/api/v1/tenants/${TENANT_A}/projects/${PROJECT_1}/discovery-sources/run`)
+      .set("X-Dev-User-Id", USER_1)
+      .send({ sourceIds: [SOURCE_1] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.answeredBySourceId).toBeNull();
+    expect(res.body.organizationsCreated).toBe(0);
+    expect(res.body.organizationsFound).toBe(0);
+  });
+
+  it("rejects a run with zero enabled sources configured", async () => {
+    const app = buildApp();
+    queueResponses([
+      ...mockMembership(),
+      { rowCount: 1, rows: [{}] }, // project exists
+      { rowCount: 0, rows: [] }, // no enabled sources in the project
+    ]);
+
+    const res = await request(app)
+      .post(`/api/v1/tenants/${TENANT_A}/projects/${PROJECT_1}/discovery-sources/run`)
+      .set("X-Dev-User-Id", USER_1)
+      .send({});
+
+    expect(res.status).toBe(400);
+  });
+
+  it("targets the search using an accepted ICP profile's firmographics when industry/geography aren't supplied", async () => {
+    const app = buildApp();
+    discoverMock.mockResolvedValueOnce({ organizations: [], contacts: {} });
+
+    queueResponses([
+      ...mockMembership(),
+      { rowCount: 1, rows: [{}] }, // project exists
+      {
+        rowCount: 1,
+        rows: [{ id: SOURCE_1, connector_type: "public_directory", name: "Source A", enabled: true, rate_limit_per_minute: 10, terms_note: null, config: {} }],
+      },
+      {
+        rowCount: 1,
+        rows: [{ firmographics: { industries: ["restaurant"], geographies: ["Global (no specific geography detected)"] } }],
+      }, // icp_profiles lookup
+    ]);
+
+    const res = await request(app)
+      .post(`/api/v1/tenants/${TENANT_A}/projects/${PROJECT_1}/discovery-sources/run`)
+      .set("X-Dev-User-Id", USER_1)
+      .send({ sourceIds: [SOURCE_1], icpProfileId: ICP_1 });
+
+    expect(res.status).toBe(200);
+    expect(discoverMock).toHaveBeenCalledWith(
+      expect.objectContaining({ industry: "restaurant", geography: undefined }),
+      expect.anything(),
+    );
   });
 });
 
@@ -488,6 +626,144 @@ describe("rankContactsForPromotion", () => {
       { verification_status: "verified", contact_channel: "named_person", created_at: now, id: "b" },
     ] as never);
     expect((ranked[0] as { id: string }).id).toBe("b");
+  });
+});
+
+describe("GET /discovered-organizations/export", () => {
+  it("rejects a format other than csv", async () => {
+    const app = buildApp();
+    queueResponses([...mockMembership(), { rowCount: 1, rows: [{}] }]);
+
+    const res = await request(app)
+      .get(`/api/v1/tenants/${TENANT_A}/projects/${PROJECT_1}/discovered-organizations/export?format=json`)
+      .set("X-Dev-User-Id", USER_1);
+
+    expect(res.status).toBe(400);
+  });
+
+  it("exports organizations as a real CSV with a header row and one row per organization", async () => {
+    const app = buildApp();
+    queueResponses([
+      ...mockMembership(),
+      { rowCount: 1, rows: [{}] }, // project exists
+      {
+        rowCount: 1,
+        rows: [
+          {
+            name: "Springfield Diner",
+            domain: "springfielddiner.example",
+            status: "new",
+            source_confidence: "verified",
+            discovered_at: "2024-01-01T00:00:00.000Z",
+            source_url: "https://springfielddiner.example",
+          },
+        ],
+      },
+    ]);
+
+    const res = await request(app)
+      .get(`/api/v1/tenants/${TENANT_A}/projects/${PROJECT_1}/discovered-organizations/export?format=csv`)
+      .set("X-Dev-User-Id", USER_1);
+
+    expect(res.status).toBe(200);
+    expect(res.headers["content-type"]).toContain("text/csv");
+    expect(res.headers["content-disposition"]).toContain("attachment");
+    expect(res.text.split("\r\n")[0]).toBe("Name,Domain,Status,Source Confidence,Discovered At,Source URL");
+    expect(res.text).toContain("Springfield Diner,springfielddiner.example,new,verified");
+  });
+
+  it("exports contacts (joined to their organization) when type=contacts", async () => {
+    const app = buildApp();
+    queueResponses([
+      ...mockMembership(),
+      { rowCount: 1, rows: [{}] }, // project exists
+      {
+        rowCount: 1,
+        rows: [
+          {
+            organization_name: "Acme Inc",
+            organization_domain: "acme.com",
+            name: "Jane Doe",
+            role_title: "Owner",
+            email: "jane@acme.com",
+            phone: null,
+            contact_channel: "named_person",
+            verification_status: "verified",
+            source_confidence: "verified",
+          },
+        ],
+      },
+    ]);
+
+    const res = await request(app)
+      .get(`/api/v1/tenants/${TENANT_A}/projects/${PROJECT_1}/discovered-organizations/export?format=csv&type=contacts`)
+      .set("X-Dev-User-Id", USER_1);
+
+    expect(res.status).toBe(200);
+    expect(res.text.split("\r\n")[0]).toBe(
+      "Organization,Organization Domain,Contact Name,Role / Title,Email,Phone,Contact Channel,Verification Status,Source Confidence",
+    );
+    expect(res.text).toContain("Acme Inc,acme.com,Jane Doe,Owner,jane@acme.com");
+
+    const queryCall = queryMock.mock.calls.find(
+      ([sql]) => typeof sql === "string" && sql.includes("FROM discovered_contacts"),
+    );
+    expect(queryCall?.[0]).toContain("JOIN discovered_organizations");
+  });
+});
+
+describe("POST /discovered-organizations/:id/decision-makers", () => {
+  it("runs the decision-maker waterfall and reports status 'not_configured' (never a fabricated contact)", async () => {
+    const app = buildApp();
+    queueResponses([
+      ...mockMembership(),
+      { rowCount: 1, rows: [{}] }, // project exists
+      {
+        rowCount: 1,
+        rows: [{ id: ORG_1, project_id: PROJECT_1, name: "Acme Inc", domain: "acme.com" }],
+      }, // loadOrganizationOr404
+      {
+        rowCount: 1,
+        rows: [{ id: "dmc-1", organization_id: ORG_1, status: "not_configured", provider: null, contacts: [] }],
+      }, // decision_maker_cache upsert
+    ]);
+
+    const res = await request(app)
+      .post(`/api/v1/tenants/${TENANT_A}/projects/${PROJECT_1}/discovered-organizations/${ORG_1}/decision-makers`)
+      .set("X-Dev-User-Id", USER_1)
+      .send({});
+
+    expect(res.status).toBe(200);
+    expect(res.body.decisionMakerLookup.status).toBe("not_configured");
+    expect(res.body.decisionMakerLookup.contacts).toEqual([]);
+
+    const upsertCall = queryMock.mock.calls.find(
+      ([sql]) => typeof sql === "string" && sql.includes("INSERT INTO decision_maker_cache"),
+    );
+    expect(upsertCall).toBeDefined();
+  });
+});
+
+describe("source_confidence on manual-create routes", () => {
+  it("defaults a manually-created organization's source_confidence to 'unconfirmed'", async () => {
+    const app = buildApp();
+    queueResponses([
+      ...mockMembership(),
+      { rowCount: 1, rows: [{}] }, // project exists
+      { rowCount: 0, rows: [] }, // no duplicate
+      { rowCount: 1, rows: [{ id: ORG_1, name: "Acme Inc", source_confidence: "unconfirmed" }] }, // INSERT
+    ]);
+
+    const res = await request(app)
+      .post(`/api/v1/tenants/${TENANT_A}/projects/${PROJECT_1}/discovered-organizations`)
+      .set("X-Dev-User-Id", USER_1)
+      .send({ name: "Acme Inc", sourceUrl: "https://directory.example/acme" });
+
+    expect(res.status).toBe(201);
+    const insertCall = queryMock.mock.calls.find(
+      ([sql]) => typeof sql === "string" && sql.includes("INSERT INTO discovered_organizations"),
+    );
+    expect(insertCall?.[1]).toContain("unconfirmed");
   });
 });
 

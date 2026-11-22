@@ -2,6 +2,8 @@ import type { PoolClient } from "pg";
 import { z } from "zod";
 import { recordUsageEvent } from "./usageEvents.js";
 import { notifyTenantOwnersAndAdmins } from "./notify.js";
+import { syncLeadToChatwootContact } from "./chatwootSync.js";
+import { logger } from "./logger.js";
 
 /**
  * The single lead-ingestion path. Used by BOTH:
@@ -124,6 +126,17 @@ export async function ingestLead(params: IngestLeadParams): Promise<IngestedLead
     body: `${leadLabel} was captured via ${source === "public_widget" ? "your website widget" : source}.`,
     linkUrl: `/tenants/${tenantId}/projects/${projectId}#leads-section`,
   });
+
+  // Milestone 2: best-effort Chatwoot contact sync (see
+  // src/lib/chatwootSync.ts's own doc comment) — never configured means a
+  // silent no-op, and any real failure is logged and swallowed here too,
+  // since syncing to an optional external inbox tool must never fail lead
+  // capture itself.
+  try {
+    await syncLeadToChatwootContact(client, tenantId, projectId, { ...input, id: row.id });
+  } catch (err) {
+    logger.warn({ err, tenantId, projectId, leadId: row.id }, "chatwoot contact sync failed, continuing");
+  }
 
   return { id: row.id, createdAt: row.created_at };
 }

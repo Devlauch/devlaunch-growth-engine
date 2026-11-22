@@ -206,12 +206,13 @@ describe("advanceDueEnrollments", () => {
   it("queries due enrollments by enrolled_at + day_offset, and no-ops when nothing is due", async () => {
     queueResponses([
       { rowCount: 0, rows: [] }, // UPDATE ... completed
+      { rowCount: 0, rows: [] }, // UPDATE ... stop-for-reply
       { rowCount: 0, rows: [] }, // SELECT due enrollments: none due
     ]);
 
     const result = await advanceDueEnrollments(fakeTenantDb() as never, TENANT_A, PROJECT_1);
 
-    expect(result).toEqual({ advanced: 0, tasksCreated: 0, skipped: [] });
+    expect(result).toEqual({ advanced: 0, tasksCreated: 0, skipped: [], stoppedForReply: 0, emailsSent: 0 });
     const dueCall = queryMock.mock.calls.find(
       ([sql]) => typeof sql === "string" && sql.includes("now() >= se.enrolled_at + (ss.day_offset"),
     );
@@ -223,6 +224,7 @@ describe("advanceDueEnrollments", () => {
     checkSendEligibilityMock.mockResolvedValueOnce({ eligible: true, blockReasons: [] });
     queueResponses([
       { rowCount: 0, rows: [] }, // UPDATE ... completed
+      { rowCount: 0, rows: [] }, // UPDATE ... stop-for-reply
       {
         rowCount: 1,
         rows: [
@@ -274,6 +276,7 @@ describe("advanceDueEnrollments", () => {
     checkSendEligibilityMock.mockResolvedValueOnce({ eligible: false, blockReasons: ["suppressed:unsubscribed"] });
     queueResponses([
       { rowCount: 0, rows: [] }, // UPDATE ... completed
+      { rowCount: 0, rows: [] }, // UPDATE ... stop-for-reply
       {
         rowCount: 1,
         rows: [
@@ -300,14 +303,16 @@ describe("advanceDueEnrollments", () => {
 
     // No crm_tasks / message_draft_variants / enrollment UPDATE query issued
     // after the ineligible result — the whole batch is never failed, just
-    // this one step is left un-advanced.
-    expect(queryMock.mock.calls.length).toBe(2);
+    // this one step is left un-advanced. (3 calls: completed-pass UPDATE,
+    // stop-for-reply UPDATE, due-steps SELECT.)
+    expect(queryMock.mock.calls.length).toBe(3);
   });
 
   it("advances an eligible email step once a matching message_draft_variants row exists", async () => {
     checkSendEligibilityMock.mockResolvedValueOnce({ eligible: true, blockReasons: [] });
     queueResponses([
       { rowCount: 0, rows: [] }, // UPDATE ... completed
+      { rowCount: 0, rows: [] }, // UPDATE ... stop-for-reply
       {
         rowCount: 1,
         rows: [
@@ -338,6 +343,7 @@ describe("advanceDueEnrollments", () => {
     checkSendEligibilityMock.mockResolvedValueOnce({ eligible: true, blockReasons: [] });
     queueResponses([
       { rowCount: 0, rows: [] }, // UPDATE ... completed
+      { rowCount: 0, rows: [] }, // UPDATE ... stop-for-reply
       {
         rowCount: 1,
         rows: [
@@ -366,6 +372,7 @@ describe("advanceDueEnrollments", () => {
   it("advances a due final_note step directly, with no eligibility check and no task/draft lookup", async () => {
     queueResponses([
       { rowCount: 0, rows: [] }, // UPDATE ... completed
+      { rowCount: 0, rows: [] }, // UPDATE ... stop-for-reply
       {
         rowCount: 1,
         rows: [
@@ -389,5 +396,117 @@ describe("advanceDueEnrollments", () => {
 
     expect(result.advanced).toBe(1);
     expect(checkSendEligibilityMock).not.toHaveBeenCalled();
+  });
+
+  it("halts (stoppedForReply) active enrollments whose lead has replied since enrolling, before selecting due steps", async () => {
+    queueResponses([
+      { rowCount: 0, rows: [] }, // UPDATE ... completed
+      { rowCount: 2, rows: [] }, // UPDATE ... stop-for-reply: 2 enrollments halted
+      { rowCount: 0, rows: [] }, // SELECT due: none (the replied leads are no longer 'active')
+    ]);
+
+    const result = await advanceDueEnrollments(fakeTenantDb() as never, TENANT_A, PROJECT_1);
+
+    expect(result.stoppedForReply).toBe(2);
+    expect(result.advanced).toBe(0);
+
+    const stopForReplyCall = queryMock.mock.calls.find(
+      ([sql]) => typeof sql === "string" && sql.includes("stopped_replied") && sql.includes("lead_replies"),
+    );
+    expect(stopForReplyCall).toBeDefined();
+    expect(stopForReplyCall![1]).toEqual([TENANT_A, PROJECT_1]);
+  });
+
+  it("sends a real email via an injected, configured EmailProvider for a due, approved email step, and counts it in emailsSent", async () => {
+    checkSendEligibilityMock.mockResolvedValueOnce({ eligible: true, blockReasons: [] });
+    queueResponses([
+      { rowCount: 0, rows: [] }, // UPDATE ... completed
+      { rowCount: 0, rows: [] }, // UPDATE ... stop-for-reply
+      {
+        rowCount: 1,
+        rows: [
+          {
+            enrollment_id: ENROLLMENT_1,
+            sequence_id: SEQUENCE_1,
+            lead_id: LEAD_1,
+            current_step_order: 0,
+            step_order: 0,
+            step_type: "email",
+            message_draft_variant_channel: "email",
+            task_instructions: null,
+            lead_email: "lead@example.com",
+          },
+        ],
+      }, // SELECT due
+      {
+        rowCount: 1,
+        rows: [{ id: "variant-1", subject: "Hi there", body: "Let's talk", sender_identity: "rep@tenant.com" }],
+      }, // SELECT message_draft_variants (joined to an 'approved' message_drafts row)
+      { rowCount: 1, rows: [] }, // UPDATE current_step_order
+    ]);
+
+    const sendMock = vi.fn().mockResolvedValue({ provider: "smtp", messageId: "abc123", sentAt: "2026-01-01T00:00:00Z" });
+    const fakeProvider = { name: "smtp", send: sendMock };
+
+    const result = await advanceDueEnrollments(fakeTenantDb() as never, TENANT_A, PROJECT_1, {
+      emailProvider: fakeProvider,
+    });
+
+    expect(result.emailsSent).toBe(1);
+    expect(result.advanced).toBe(1);
+    expect(result.skipped).toEqual([]);
+    expect(sendMock).toHaveBeenCalledWith({
+      to: "lead@example.com",
+      subject: "Hi there",
+      body: "Let's talk",
+      from: "rep@tenant.com",
+    });
+
+    const variantCall = queryMock.mock.calls.find(
+      ([sql]) => typeof sql === "string" && sql.includes("FROM message_draft_variants"),
+    );
+    expect(variantCall).toBeDefined();
+    expect(variantCall![0]).toContain("md.status = 'approved'");
+  });
+
+  it("does not advance, and records why, when a real EmailProvider is configured but the send genuinely fails", async () => {
+    checkSendEligibilityMock.mockResolvedValueOnce({ eligible: true, blockReasons: [] });
+    queueResponses([
+      { rowCount: 0, rows: [] }, // UPDATE ... completed
+      { rowCount: 0, rows: [] }, // UPDATE ... stop-for-reply
+      {
+        rowCount: 1,
+        rows: [
+          {
+            enrollment_id: ENROLLMENT_1,
+            sequence_id: SEQUENCE_1,
+            lead_id: LEAD_1,
+            current_step_order: 0,
+            step_order: 0,
+            step_type: "email",
+            message_draft_variant_channel: "email",
+            task_instructions: null,
+            lead_email: "lead@example.com",
+          },
+        ],
+      }, // SELECT due
+      {
+        rowCount: 1,
+        rows: [{ id: "variant-1", subject: "Hi there", body: "Let's talk", sender_identity: "rep@tenant.com" }],
+      }, // SELECT message_draft_variants
+      // NOTE: no UPDATE current_step_order mocked — a real send failure must not advance the step.
+    ]);
+
+    const fakeProvider = { name: "smtp", send: vi.fn().mockRejectedValue(new Error("SMTP connection refused")) };
+
+    const result = await advanceDueEnrollments(fakeTenantDb() as never, TENANT_A, PROJECT_1, {
+      emailProvider: fakeProvider,
+    });
+
+    expect(result.emailsSent).toBe(0);
+    expect(result.advanced).toBe(0);
+    expect(result.skipped).toEqual([
+      { enrollmentId: ENROLLMENT_1, reason: "email_send_failed:SMTP connection refused" },
+    ]);
   });
 });
