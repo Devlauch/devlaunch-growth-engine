@@ -59,3 +59,22 @@ export interface AgentRunJobData {
   agentId: string;
   input: unknown;
 }
+
+/**
+ * Name of the BullMQ queue apps/api enqueues report-generation jobs onto
+ * and apps/worker consumes (see apps/worker/src/reports/reportWorker.ts).
+ * A separate queue from AGENT_RUN_QUEUE_NAME since report generation is not
+ * an agent-registry executor — it's a direct, real SQL-query + PDF-render
+ * job (see docs on generated_reports in packages/db/migrations).
+ */
+export const REPORT_GENERATION_QUEUE_NAME = "report-generation";
+
+/** Shape of the BullMQ job payload for a report-generation run (shared by api + worker). */
+export interface ReportGenerationJobData {
+  reportId: string;
+  tenantId: string;
+  projectId: string;
+  scheduleId?: string | null;
+  periodStart: string;
+  periodEnd: string;
+}

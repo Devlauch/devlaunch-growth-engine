@@ -40,4 +40,11 @@ export const env = {
   // numbers. See apps/api/src/lib/dnsVerification.ts for the same
   // injectable/graceful-degradation convention.
   googlePageSpeedApiKey: process.env.GOOGLE_PAGESPEED_API_KEY ?? null,
+
+  // Client PDF reports: local-volume file store (no S3/object storage is
+  // configured in this environment). Shared with the `report_files`
+  // volume, mounted into both api and worker (see docker-compose.yml) so
+  // apps/worker can write the generated PDF and this process can stream it
+  // back via GET .../reports/:id/download.
+  reportFilesDir: process.env.REPORT_FILES_DIR ?? "./report_files",
 };

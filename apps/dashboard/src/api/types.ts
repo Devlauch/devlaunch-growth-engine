@@ -299,3 +299,41 @@ export interface PlanUsageResponse {
   limits: PlanLimits;
   usage: Record<QuotaResource, QuotaUsageEntry>;
 }
+
+export type ReportStatus = "queued" | "running" | "succeeded" | "failed";
+
+export interface GeneratedReport {
+  id: string;
+  schedule_id: string | null;
+  status: ReportStatus;
+  period_start: string;
+  period_end: string;
+  file_bytes: number | null;
+  error: string | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface GenerateReportResult {
+  reportId: string;
+  status: ReportStatus;
+}
+
+// GET/POST/PATCH .../report-schedules. recipients is stored only — this
+// environment has no real SMTP/email-provider configured, so nothing is
+// ever actually emailed; a due+enabled schedule just produces a real,
+// downloadable generated_reports row (see apps/worker/src/reports/scheduleLoop.ts).
+export type ReportFrequency = "weekly" | "monthly";
+
+export interface ReportSchedule {
+  id: string;
+  tenant_id: string;
+  project_id: string;
+  frequency: ReportFrequency;
+  recipients: string[];
+  enabled: boolean;
+  last_generated_at: string | null;
+  created_at: string;
+  updated_at: string;
+}

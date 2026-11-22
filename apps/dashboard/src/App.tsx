@@ -10,6 +10,7 @@ import { ExecutionPage } from "./pages/ExecutionPage";
 import { CampaignsPage } from "./pages/CampaignsPage";
 import { CampaignDetailPage } from "./pages/CampaignDetailPage";
 import { AnalyticsPage } from "./pages/AnalyticsPage";
+import { ReportsPage } from "./pages/ReportsPage";
 import { UsagePage } from "./pages/UsagePage";
 import { PlanUsagePage } from "./pages/PlanUsagePage";
 import { IntegrationsPage } from "./pages/IntegrationsPage";
@@ -25,6 +26,7 @@ import { SeoAuditPage } from "./pages/SeoAuditPage";
 import { LeadIntelligencePage } from "./pages/LeadIntelligencePage";
 import { ConversionOptimizationPage } from "./pages/ConversionOptimizationPage";
 import { MarketingIntelligencePage } from "./pages/MarketingIntelligencePage";
+import { WorkflowPage } from "./pages/WorkflowPage";
 
 function RequireAuth({ children }: { children: ReactNode }) {
   const { user, loading } = useAuth();
@@ -101,6 +103,14 @@ export function App() {
         element={
           <RequireAuth>
             <AnalyticsPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/tenants/:tenantId/projects/:projectId/reports"
+        element={
+          <RequireAuth>
+            <ReportsPage />
           </RequireAuth>
         }
       />
@@ -205,6 +215,14 @@ export function App() {
         element={
           <RequireAuth>
             <MarketingIntelligencePage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/tenants/:tenantId/projects/:projectId/workflows"
+        element={
+          <RequireAuth>
+            <WorkflowPage />
           </RequireAuth>
         }
       />

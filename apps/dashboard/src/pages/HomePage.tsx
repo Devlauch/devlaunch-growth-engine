@@ -6,6 +6,7 @@ import { ErrorBanner } from "../components/ErrorBanner";
 import { api, ApiError } from "../api/client";
 import type { Tenant } from "../api/types";
 import { StatCard, StatGrid } from "../components/StatCard";
+import { SkeletonStatGrid, SkeletonText } from "../components/Skeleton";
 import { IconBuilding } from "../components/Icons";
 
 function slugify(value: string): string {
@@ -60,13 +61,13 @@ export function HomePage() {
 
   return (
     <Layout>
-      <StatGrid>
-        <StatCard
-          icon={<IconBuilding />}
-          label="Organizations"
-          value={tenants === null ? "…" : tenants.length}
-        />
-      </StatGrid>
+      {tenants === null ? (
+        <SkeletonStatGrid count={1} />
+      ) : (
+        <StatGrid>
+          <StatCard icon={<IconBuilding />} label="Organizations" value={tenants.length} />
+        </StatGrid>
+      )}
 
       <section className="panel">
         <h1>Your organizations</h1>
@@ -78,7 +79,11 @@ export function HomePage() {
         <ErrorBanner message={loadError} />
 
         {tenants === null ? (
-          <p className="muted">Loading...</p>
+          <div aria-hidden="true">
+            <SkeletonText width="70%" />
+            <SkeletonText width="45%" />
+            <SkeletonText width="60%" />
+          </div>
         ) : tenants.length === 0 ? (
           <EmptyState title="No organizations yet" hint="Create your first one below." />
         ) : (

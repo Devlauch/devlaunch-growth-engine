@@ -47,6 +47,9 @@ import { marketingIntelligenceRouter } from "./routes/marketingIntelligence.js";
 import { usageRouter } from "./routes/usage.js";
 import { apiRequestCounterMiddleware } from "./lib/usageTracking.js";
 import { planRouter } from "./routes/planUsage.js";
+import { reportsRouter } from "./routes/reports.js";
+import { reportSchedulesRouter } from "./routes/reportSchedules.js";
+import { workflowsRouter } from "./routes/workflows.js";
 
 export function createApp(): express.Express {
   const app = express();
@@ -151,6 +154,14 @@ export function createApp(): express.Express {
   // Subscription plan + quota enforcement (data model + manual/admin-only
   // plan changes — no real payment processing; see routes/planUsage.ts).
   app.use("/api/v1/tenants/:tenantId/plan", mainCors, planRouter);
+  // Client PDF reports (on-demand + scheduled) — additive only, mounted
+  // after everything else. See docs/.../REPORT_FILES_DIR in config/env.ts
+  // and apps/api/src/routes/reports.ts / reportSchedules.ts for details.
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/reports", mainCors, reportsRouter);
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/report-schedules", mainCors, reportSchedulesRouter);
+  // Phase 4: cross-agent workflow orchestration (client onboarding -> ... ->
+  // analytics/learning), one stage per advance call. See apps/api/src/workflow/.
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/workflows", mainCors, workflowsRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

@@ -1,5 +1,12 @@
-export type { AgentDefinition, AgentRunRequest, AgentRunResult, EvidenceItem, AgentRunJobData } from "./types.js";
-export { AGENT_RUN_QUEUE_NAME } from "./types.js";
+export type {
+  AgentDefinition,
+  AgentRunRequest,
+  AgentRunResult,
+  EvidenceItem,
+  AgentRunJobData,
+  ReportGenerationJobData,
+} from "./types.js";
+export { AGENT_RUN_QUEUE_NAME, REPORT_GENERATION_QUEUE_NAME } from "./types.js";
 export { AgentRegistry } from "./registry.js";
 
 // Lead-discovery source connectors (moved here from apps/worker/src/connectors

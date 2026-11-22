@@ -222,12 +222,28 @@ export function Layout({ children, crumbs, tenantName, projectName, hasLeads = t
                     Campaigns
                   </NavLink>
                   <NavLink
+                    to={`/tenants/${tenantId}/projects/${projectId}/workflows`}
+                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/workflows`)}
+                    icon={<IconZap />}
+                    onClick={closeMobileNav}
+                  >
+                    Workflows
+                  </NavLink>
+                  <NavLink
                     to={`/tenants/${tenantId}/projects/${projectId}/analytics`}
                     active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/analytics`)}
                     icon={<IconChart />}
                     onClick={closeMobileNav}
                   >
                     Analytics
+                  </NavLink>
+                  <NavLink
+                    to={`/tenants/${tenantId}/projects/${projectId}/reports`}
+                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/reports`)}
+                    icon={<IconChart />}
+                    onClick={closeMobileNav}
+                  >
+                    Reports
                   </NavLink>
                   <NavLink
                     to={`/tenants/${tenantId}/projects/${projectId}/integrations`}
