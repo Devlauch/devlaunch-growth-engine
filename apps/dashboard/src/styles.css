@@ -118,17 +118,9 @@ code {
 .sidebar-collapsed .nav-section-label,
 .sidebar-collapsed .nav-item span:not(.nav-icon),
 .sidebar-collapsed .nav-soon-badge,
-.sidebar-collapsed .brand-accent,
+.sidebar-collapsed .brand-text,
 .sidebar-collapsed .sidebar-user {
   display: none;
-}
-
-.sidebar-collapsed .brand {
-  font-size: 0;
-}
-
-.sidebar-collapsed .brand::first-letter {
-  font-size: 1rem;
 }
 
 .sidebar-collapsed .nav-item {
@@ -144,6 +136,24 @@ code {
   align-items: center;
   justify-content: space-between;
   padding: 20px 16px 12px;
+  gap: 8px;
+}
+
+.sidebar-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.sidebar-collapsed .sidebar-header {
+  justify-content: center;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sidebar-collapsed .sidebar-close {
+  display: none;
 }
 
 .sidebar-close {
@@ -764,6 +774,7 @@ input[type="checkbox"] {
   align-items: center;
   justify-content: center;
   background: radial-gradient(circle at 50% 0%, #eceaff 0%, var(--bg) 60%);
+  padding: 24px;
 }
 
 .auth-card .brand {
@@ -778,10 +789,14 @@ input[type="checkbox"] {
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  box-shadow: var(--shadow-card);
-  padding: 32px;
+  box-shadow: var(--shadow-card-hover);
+  padding: 36px;
   width: 100%;
-  max-width: 380px;
+  max-width: 400px;
+}
+
+.auth-brand {
+  margin-bottom: 4px;
 }
 
 .auth-card .brand {
@@ -1148,6 +1163,10 @@ input[type="checkbox"] {
 
   .sidebar-close {
     display: inline-flex;
+  }
+
+  .sidebar-collapse-btn {
+    display: none;
   }
 
   .sidebar-overlay {

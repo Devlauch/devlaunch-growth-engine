@@ -35,9 +35,12 @@ export function LoginPage() {
   return (
     <div className="auth-screen">
       <div className="auth-card">
-        <h1 className="brand">
-          DevLaunch <span className="brand-accent">Growth Engine</span>
-        </h1>
+        <div className="brand auth-brand">
+          <span className="brand-mark">DL</span>
+          <span className="brand-text">
+            DevLaunch <span className="brand-accent">Growth Engine</span>
+          </span>
+        </div>
         <p className="auth-subtitle">
           {mode === "login" ? "Log in to manage your projects and leads." : "Create an account to get started."}
         </p>

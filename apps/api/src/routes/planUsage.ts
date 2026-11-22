@@ -29,9 +29,14 @@ function requireRole(req: Request, allowed: readonly string[]) {
  */
 planRouter.get("/", async (req, res, next) => {
   try {
-    const usages = await Promise.all(
-      QUOTA_RESOURCES.map((resource) => getQuotaUsage(req.tenantDb!, req.tenantId as string, resource)),
-    );
+    // Sequential, not Promise.all: these all share one pooled client
+    // (req.tenantDb), which processes one query at a time regardless —
+    // firing them "concurrently" only risks confusing interleaving with no
+    // real parallelism benefit.
+    const usages = [];
+    for (const resource of QUOTA_RESOURCES) {
+      usages.push(await getQuotaUsage(req.tenantDb!, req.tenantId as string, resource));
+    }
     const plan = usages[0]!.plan;
 
     res.json({

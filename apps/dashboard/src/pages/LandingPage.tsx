@@ -33,13 +33,71 @@ const FEATURES = [
   },
 ];
 
+// Decorative hero graphic only — an abstract agent/workflow motif built from
+// plain shapes, not a chart of any numbers. No data, real or fabricated, is
+// encoded in it.
+function HeroIllustration() {
+  return (
+    <svg viewBox="0 0 420 360" xmlns="http://www.w3.org/2000/svg" role="presentation" aria-hidden="true">
+      <defs>
+        <linearGradient id="heroCardFill" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stopColor="#7c6cf5" />
+          <stop offset="100%" stopColor="#a259e6" />
+        </linearGradient>
+        <linearGradient id="heroNodeFill" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stopColor="#6d5cf0" />
+          <stop offset="100%" stopColor="#8a7af7" />
+        </linearGradient>
+      </defs>
+
+      <rect x="18" y="140" width="384" height="190" rx="20" fill="#ffffff" opacity="0.7" />
+      <rect x="40" y="36" width="220" height="150" rx="18" fill="url(#heroCardFill)" />
+      <rect x="64" y="64" width="140" height="12" rx="6" fill="#ffffff" opacity="0.85" />
+      <rect x="64" y="90" width="172" height="10" rx="5" fill="#ffffff" opacity="0.55" />
+      <rect x="64" y="108" width="100" height="10" rx="5" fill="#ffffff" opacity="0.55" />
+      <circle cx="78" cy="150" r="10" fill="#ffffff" opacity="0.9" />
+      <circle cx="108" cy="150" r="10" fill="#ffffff" opacity="0.6" />
+      <circle cx="138" cy="150" r="10" fill="#ffffff" opacity="0.4" />
+
+      <rect x="230" y="150" width="160" height="110" rx="16" fill="#ffffff" stroke="#e6e7f0" strokeWidth="1.5" />
+      <circle cx="262" cy="182" r="16" fill="url(#heroNodeFill)" />
+      <path d="M254 182h16M262 174v16" stroke="#fff" strokeWidth="2.4" strokeLinecap="round" />
+      <rect x="290" y="174" width="80" height="9" rx="4.5" fill="#dcd9fb" />
+      <rect x="290" y="192" width="60" height="9" rx="4.5" fill="#edeef6" />
+      <rect x="250" y="216" width="120" height="26" rx="13" fill="#f4f5fb" />
+      <circle cx="266" cy="229" r="6" fill="#0f9d64" />
+      <rect x="282" y="224" width="70" height="9" rx="4.5" fill="#cfd1dd" />
+
+      <g opacity="0.9">
+        <circle cx="70" cy="270" r="26" fill="#ffffff" stroke="#e6e7f0" strokeWidth="1.5" />
+        <circle cx="70" cy="262" r="8" fill="#a259e6" />
+        <path d="M54 282c2-10 8-16 16-16s14 6 16 16" fill="#a259e6" />
+      </g>
+      <rect x="112" y="252" width="90" height="36" rx="12" fill="#ffffff" stroke="#e6e7f0" strokeWidth="1.5" />
+      <rect x="126" y="263" width="60" height="8" rx="4" fill="#dcd9fb" />
+      <rect x="126" y="276" width="40" height="8" rx="4" fill="#edeef6" />
+
+      <path
+        d="M96 268c20-6 34-6 46 0M262 198v18M202 270h28"
+        stroke="#b9aefc"
+        strokeWidth="2"
+        strokeDasharray="4 5"
+        fill="none"
+      />
+    </svg>
+  );
+}
+
 export function LandingPage() {
   return (
     <div className="landing">
       <header className="landing-header">
         <div className="landing-header-inner">
           <Link to="/" className="brand">
-            DevLaunch <span className="brand-accent">Growth Engine</span>
+            <span className="brand-mark">DL</span>
+            <span className="brand-text">
+              DevLaunch <span className="brand-accent">Growth Engine</span>
+            </span>
           </Link>
           <nav className="landing-header-actions">
             <Link to="/login" className="btn-link">
@@ -55,21 +113,29 @@ export function LandingPage() {
       <main>
         <section className="landing-hero">
           <div className="landing-hero-inner">
-            <h1 className="landing-hero-title">
-              Capture leads and run agent-assisted research, in one tenant-isolated workspace
-            </h1>
-            <p className="landing-hero-subtitle">
-              DevLaunch Growth Engine is an early-stage internal platform for multi-tenant lead capture via an
-              embeddable widget, project-scoped agent executions like market research, and audit-logged,
-              human-approval-gated actions — all under one roof.
-            </p>
-            <div className="landing-hero-actions">
-              <Link to="/login" className="btn btn-primary">
-                Sign in
-              </Link>
-              <Link to="/login" className="btn btn-secondary">
-                Create an account
-              </Link>
+            <div>
+              <span className="landing-hero-eyebrow">
+                <IconZap width={13} height={13} /> AI-assisted growth workspace
+              </span>
+              <h1 className="landing-hero-title">
+                Capture leads and run agent-assisted research, in one tenant-isolated workspace
+              </h1>
+              <p className="landing-hero-subtitle">
+                DevLaunch Growth Engine is an early-stage internal platform for multi-tenant lead capture via an
+                embeddable widget, project-scoped agent executions like market research, and audit-logged,
+                human-approval-gated actions — all under one roof.
+              </p>
+              <div className="landing-hero-actions">
+                <Link to="/login" className="btn btn-primary">
+                  Sign in
+                </Link>
+                <Link to="/login" className="btn btn-secondary">
+                  Create an account
+                </Link>
+              </div>
+            </div>
+            <div className="landing-hero-art">
+              <HeroIllustration />
             </div>
           </div>
         </section>
@@ -77,6 +143,7 @@ export function LandingPage() {
         <section className="landing-features">
           <div className="landing-features-inner">
             <h2 className="landing-section-title">How it works</h2>
+            <p className="landing-section-subtitle">What's actually built today, project by project.</p>
             <div className="landing-feature-grid">
               {FEATURES.map((f) => (
                 <div className="panel landing-feature-card" key={f.title}>
@@ -93,8 +160,15 @@ export function LandingPage() {
       <footer className="landing-footer">
         <div className="landing-footer-inner">
           <span className="brand">
-            DevLaunch <span className="brand-accent">Growth Engine</span>
+            <span className="brand-mark">DL</span>
+            <span className="brand-text">
+              DevLaunch <span className="brand-accent">Growth Engine</span>
+            </span>
           </span>
+          <nav className="landing-footer-links">
+            <Link to="/login">Sign in</Link>
+            <a href="#features">Features</a>
+          </nav>
           <span className="muted landing-footer-note">Phase 1 internal product.</span>
         </div>
       </footer>

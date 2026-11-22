@@ -108,7 +108,10 @@ describe("PATCH /api/v1/tenants/:tenantId/plan", () => {
       ([sql]) => typeof sql === "string" && sql.includes("INSERT INTO audit_events"),
     );
     expect(auditCall).toBeDefined();
-    expect(auditCall![1][2]).toBe("tenant.plan_changed");
+    // 'tenant.plan_changed' is a literal in the SQL text, not a bound
+    // parameter — assert on the query string, not a params-array index.
+    expect(auditCall![0]).toContain("tenant.plan_changed");
+    expect(JSON.parse(auditCall![1][2])).toEqual({ newPlan: "growth" });
   });
 
   it("rejects a plan change from a non-owner member with 403 and never touches the row", async () => {

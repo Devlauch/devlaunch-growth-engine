@@ -5,6 +5,7 @@ import {
   IconBell,
   IconBuilding,
   IconChart,
+  IconChevronsLeft,
   IconClose,
   IconInbox,
   IconKey,
@@ -18,6 +19,8 @@ import {
   IconUsers,
   IconZap,
 } from "./Icons";
+
+const SIDEBAR_COLLAPSED_KEY = "devlaunch.sidebarCollapsed";
 
 // Derive short initials for the header avatar from the real logged-in user —
 // never a placeholder. Falls back to the email's first letter when no full
@@ -80,6 +83,13 @@ export function Layout({ children, crumbs, tenantName, projectName, hasLeads = t
   const location = useLocation();
   const { tenantId, projectId } = useParams<{ tenantId?: string; projectId?: string }>();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
 
   // Close the mobile nav whenever the route changes underneath it.
   useEffect(() => {
@@ -88,16 +98,50 @@ export function Layout({ children, crumbs, tenantName, projectName, hasLeads = t
 
   const closeMobileNav = () => setMobileNavOpen(false);
 
+  function toggleCollapsed() {
+    setCollapsed((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem(SIDEBAR_COLLAPSED_KEY, next ? "1" : "0");
+      } catch {
+        // ignore — collapsed state just won't persist across reloads
+      }
+      return next;
+    });
+  }
+
+  const sidebarClass = [
+    "sidebar",
+    mobileNavOpen ? "sidebar-open" : "",
+    collapsed ? "sidebar-collapsed" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
   return (
     <div className="shell">
-      <aside className={mobileNavOpen ? "sidebar sidebar-open" : "sidebar"}>
+      <aside className={sidebarClass}>
         <div className="sidebar-header">
           <Link to="/" className="brand" onClick={closeMobileNav}>
-            DevLaunch <span className="brand-accent">Growth Engine</span>
+            <span className="brand-mark">DL</span>
+            <span className="brand-text">
+              DevLaunch <span className="brand-accent">Growth Engine</span>
+            </span>
           </Link>
-          <button type="button" className="sidebar-close" aria-label="Close menu" onClick={closeMobileNav}>
-            <IconClose />
-          </button>
+          <div className="sidebar-header-actions">
+            <button type="button" className="sidebar-close" aria-label="Close menu" onClick={closeMobileNav}>
+              <IconClose />
+            </button>
+            <button
+              type="button"
+              className="sidebar-collapse-btn"
+              aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+              title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+              onClick={toggleCollapsed}
+            >
+              <IconChevronsLeft width={15} height={15} />
+            </button>
+          </div>
         </div>
 
         <nav className="sidebar-nav" aria-label="Primary">
