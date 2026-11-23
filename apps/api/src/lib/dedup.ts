@@ -165,9 +165,31 @@ export async function findDuplicateOrganization(
 }
 
 /**
+ * Normalizes a person's name for fuzzy-ish exact matching: lowercase, trim,
+ * collapse internal whitespace. Mirrors normalizeOrgName/normalizeDomain's
+ * normalize-before-compare approach — a contact name has no dedicated
+ * `normalized_name` column (unlike discovered_organizations.normalized_name
+ * or discovered_contacts.normalized_email), so this is applied at query time
+ * on both sides of the comparison instead.
+ */
+export function normalizeContactName(input: string | null | undefined): string {
+  if (!input || typeof input !== "string") return "";
+  return input.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+/**
  * Looks for an existing discovered_contacts row matching the given email
  * (exact, normalized) or name within the same organization. Email match is
  * checked first; name is a fallback for sources without an email.
+ *
+ * The name fallback compares normalized values (trimmed, lowercased,
+ * whitespace-collapsed) rather than a raw exact string match — two
+ * connector runs surfacing "Jane Doe" and "jane  doe" (different casing or
+ * double-spacing from a scraped page) are the same real person and must
+ * dedup, not silently create a second discovered_contacts row for the same
+ * lead. Previously this compared `name = $2` verbatim, so any casing or
+ * whitespace difference across runs/sources defeated the dedup guard this
+ * function exists to provide.
  */
 export async function findDuplicateContact(
   tenantDb: Pick<PoolClient, "query">,
@@ -188,12 +210,13 @@ export async function findDuplicateContact(
     }
   }
 
-  if (contact.name && contact.name.trim().length > 0) {
+  const normalizedName = normalizeContactName(contact.name);
+  if (normalizedName.length > 0) {
     const byName = await tenantDb.query(
       `SELECT id, name, email FROM discovered_contacts
-       WHERE organization_id = $1 AND name = $2
+       WHERE organization_id = $1 AND lower(regexp_replace(trim(name), '\\s+', ' ', 'g')) = $2
        LIMIT 1`,
-      [organizationId, contact.name.trim()],
+      [organizationId, normalizedName],
     );
     if (byName.rowCount && byName.rowCount > 0) {
       return byName.rows[0] as DuplicateContactMatch;

@@ -7,6 +7,7 @@ import { leadInputSchema, ingestLead } from "../lib/leadIngestion.js";
 import { rateLimitMiddleware } from "../middleware/rateLimit.js";
 import { env } from "../config/env.js";
 import { logger } from "../lib/logger.js";
+import { visitorCorrelationSchema, recordLeadVisitorCorrelation } from "../lib/visitorLeadCorrelation.js";
 
 export const publicLeadsRouter = Router();
 
@@ -153,6 +154,12 @@ publicLeadsRouter.post("/projects/:projectPublicKey/leads", perIpLimiter, perKey
   try {
     const projectPublicKey = publicKeyParamSchema.parse(req.params.projectPublicKey);
     const body = leadInputSchema.parse(req.body);
+    // Milestone 2: optional visitor/session correlation (see
+    // src/lib/visitorLeadCorrelation.ts) -- parsed separately since
+    // leadInputSchema (owned by leadIngestion.ts, hot this round) doesn't
+    // carry these fields; sent by analytics.js via embed.js's "graceful
+    // if-present" pickup, never required.
+    const correlation = visitorCorrelationSchema.parse(req.body);
     const origin = req.header("origin") ?? null;
 
     await client.query("BEGIN");
@@ -200,6 +207,8 @@ publicLeadsRouter.post("/projects/:projectPublicKey/leads", perIpLimiter, perKey
       origin,
       ipHash: hashIp(req.ip ?? "unknown"),
     });
+
+    await recordLeadVisitorCorrelation(client, project.tenant_id, lead.id, correlation.visitorId, correlation.sessionId);
 
     await client.query("COMMIT");
     settled = true;

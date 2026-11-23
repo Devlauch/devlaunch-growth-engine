@@ -4,6 +4,8 @@ import { requireAuth } from "../middleware/auth.js";
 import { requireTenantMembership } from "../middleware/tenant.js";
 import { Errors } from "../lib/httpError.js";
 import { classifyReply } from "../lib/classifyReply.js";
+import { recomputeLeadScore } from "./scoring.js";
+import { logger } from "../lib/logger.js";
 
 /**
  * repliesRouter: mounted at
@@ -222,6 +224,18 @@ repliesRouter.post("/", async (req, res, next) => {
         crmTaskId,
       ],
     );
+
+    // A classified reply is new evidence about this lead (engagement,
+    // interest, or an opt-out) — recompute its rubric score now rather
+    // than waiting on a human /recompute call or a periodic sweep. Reuses
+    // this request's own tenantDb client, so it's awaited, not
+    // fire-and-forget; best-effort, since a scoring failure must never
+    // fail a reply that was already recorded.
+    try {
+      await recomputeLeadScore(db, req.tenantId!, projectId, leadId);
+    } catch (err) {
+      logger.error({ err, leadId, projectId }, "lead score recompute after reply classification failed");
+    }
 
     res.status(201).json({
       reply: replyResult.rows[0],

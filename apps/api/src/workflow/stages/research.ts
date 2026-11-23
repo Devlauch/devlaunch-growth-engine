@@ -9,6 +9,7 @@ import { detectCompetitorChanges, type DetectedChange, type SnapshotPage } from 
 import { extractKeywords, type ExtractedKeyword } from "../../lib/keywordExtraction.js";
 import { runSiteAudit, type RunSiteAuditResult } from "../../lib/siteAudit.js";
 import { stripHtml } from "../../lib/htmlText.js";
+import { safeFetch } from "../../lib/ssrfGuard.js";
 
 /**
  * Stage 2: research. Phase 4 orchestration stage composing three
@@ -98,11 +99,21 @@ async function crawlCompetitorDomain(domain: string): Promise<{ pages: SnapshotP
   return { pages, combinedText };
 }
 
-/** Real, best-effort homepage text fetch for the client's own site, used only for keyword comparison. */
+/**
+ * Real, best-effort homepage text fetch for the client's own site, used only
+ * for keyword comparison. `domain` comes from `inputConfig.researchDomain`
+ * (workflow-caller-supplied) or `project_profiles.website_url` (tenant
+ * data) — both attacker-influenceable, so this goes through the same
+ * SSRF-hardened `safeFetch` (../../lib/ssrfGuard.ts) every other
+ * tenant/user-supplied-domain fetch in this codebase uses (see
+ * growthAnalyzer.ts, internalLinking.ts, siteAudit.ts, crawl4aiClient.ts),
+ * never bare `fetch`. An `SsrfBlockedError` is just another best-effort
+ * failure here — caught and reported as "no homepage text", not thrown.
+ */
 async function fetchClientHomepageText(domain: string): Promise<string | null> {
   const root = normalizeDomainToOrigin(domain);
   try {
-    const res = await fetch(root, { signal: AbortSignal.timeout(CLIENT_FETCH_TIMEOUT_MS) });
+    const res = await safeFetch(root, {}, { timeoutMs: CLIENT_FETCH_TIMEOUT_MS });
     if (!res.ok) return null;
     const html = await res.text();
     return stripHtml(html);

@@ -44,12 +44,25 @@ const PROVIDERS = [
   { key: "formbricks", label: "Formbricks", category: "feedback" },
   { key: "chatwoot", label: "Chatwoot", category: "chat" },
   { key: "hunter", label: "Hunter", category: "enrichment" },
+  { key: "clearbit", label: "Clearbit", category: "enrichment" },
+  { key: "google_ads", label: "Google Ads", category: "ads" },
+  { key: "meta_ads", label: "Meta Ads", category: "ads" },
+  { key: "whatsapp_business", label: "WhatsApp Business", category: "messaging" },
 ] as const;
 
 // The providers that actually build a real connection (health-check calls
 // a real external API). Everything else keeps the old registry-only
 // ("pending_setup" label, never 'connected') behavior.
-const REAL_PROVIDERS = new Set(["listmonk", "chatwoot", "postiz", "hunter"]);
+const REAL_PROVIDERS = new Set([
+  "listmonk",
+  "chatwoot",
+  "postiz",
+  "hunter",
+  "clearbit",
+  "google_ads",
+  "meta_ads",
+  "whatsapp_business",
+]);
 
 type ProviderKey = (typeof PROVIDERS)[number]["key"];
 const PROVIDER_KEYS = PROVIDERS.map((p) => p.key) as [ProviderKey, ...ProviderKey[]];

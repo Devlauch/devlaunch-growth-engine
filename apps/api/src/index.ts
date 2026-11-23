@@ -1,7 +1,7 @@
 import { createApp } from "./app.js";
 import { env } from "./config/env.js";
 import { logger } from "./lib/logger.js";
-import { pool, withTenantContext } from "./db/pool.js";
+import { pool, withTenantContext, assertDatabaseRoleRespectsRls } from "./db/pool.js";
 import { startApiRequestUsageFlush, stopApiRequestUsageFlush } from "./lib/usageTracking.js";
 
 const app = createApp();
@@ -11,6 +11,11 @@ const server = app.listen(env.port, () => {
   if (env.allowDevAuth) {
     logger.warn("ALLOW_DEV_AUTH is true: X-Dev-User-Id header auth is DEV ONLY — disable before production");
   }
+});
+
+void assertDatabaseRoleRespectsRls().catch((err) => {
+  logger.error({ err }, "database role RLS check failed");
+  process.exit(1);
 });
 
 // Real usage tracking: periodically flush the in-memory api_request

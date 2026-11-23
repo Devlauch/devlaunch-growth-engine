@@ -1,12 +1,19 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { useParams } from "react-router-dom";
 import { Layout } from "../components/Layout";
+import { EmptyState } from "../components/EmptyState";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { Badge } from "../components/Badge";
 import { api, ApiError } from "../api/client";
-import type { IntegrationEntry, IntegrationStatus, Project } from "../api/types";
+import type {
+  IntegrationEntry,
+  IntegrationStatus,
+  IntegrationConnectResponse,
+  IntegrationHealthCheckResponse,
+  Project,
+} from "../api/types";
 
-function statusToneFor(status: IntegrationStatus): "neutral" | "info" | "success" | "warn" | "danger" {
+function statusToneFor(status: IntegrationStatus | "integration_not_yet_implemented"): "neutral" | "info" | "success" | "warn" | "danger" {
   switch (status) {
     case "connected":
       return "success";
@@ -14,29 +21,37 @@ function statusToneFor(status: IntegrationStatus): "neutral" | "info" | "success
       return "warn";
     case "error":
       return "danger";
+    case "integration_not_yet_implemented":
+      return "info";
     default:
       return "neutral";
   }
 }
 
-function statusLabelFor(status: IntegrationStatus): string {
+function statusLabelFor(status: IntegrationStatus | "integration_not_yet_implemented"): string {
   switch (status) {
     case "connected":
       return "Connected";
     case "pending_setup":
-      return "Pending setup (placeholder)";
+      return "Pending setup";
     case "error":
       return "Error";
+    case "integration_not_yet_implemented":
+      return "Not yet implemented";
     default:
       return "Not connected";
   }
 }
 
-// This page lists the provider registry (apps/api/src/routes/integrations.ts)
-// and lets a user record a placeholder "pending setup" label for a provider.
-// There is NO real OAuth/API connection to any of these providers in this
-// phase — the UI makes this explicit everywhere rather than hiding it, per
-// the product spec's ground rules.
+// This page lists the provider registry (apps/api/src/routes/integrations.ts).
+// Milestone 2: listmonk, chatwoot, and postiz support a real per-tenant
+// connection — a config (non-secret settings, e.g. baseUrl/inboxId) plus an
+// optional secret (API key/token) that's encrypted at rest before storage,
+// and a real "Check health" action. Every other provider (twenty, mautic,
+// posthog, formbricks) remains registry-only: connecting them just records
+// config/credential the same way, but there is no real external service on
+// the other end, and health-check always reports "not yet implemented" for
+// them (there is no client module for them by design, not by omission).
 export function IntegrationsPage() {
   const { tenantId, projectId } = useParams<{ tenantId: string; projectId: string }>();
 
@@ -46,9 +61,14 @@ export function IntegrationsPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const [connectingProvider, setConnectingProvider] = useState<string | null>(null);
-  const [labelDraft, setLabelDraft] = useState("");
+  const [configDraft, setConfigDraft] = useState("{}");
+  const [secretDraft, setSecretDraft] = useState("");
   const [connectError, setConnectError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
+
+  const [healthCheckingProvider, setHealthCheckingProvider] = useState<string | null>(null);
+  const [healthResults, setHealthResults] = useState<Record<string, IntegrationHealthCheckResponse>>({});
+  const [healthError, setHealthError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!tenantId || !projectId) return;
@@ -75,18 +95,46 @@ export function IntegrationsPage() {
     e.preventDefault();
     if (!tenantId || !projectId) return;
     setConnectError(null);
+
+    let config: Record<string, unknown>;
+    try {
+      config = configDraft.trim() === "" ? {} : (JSON.parse(configDraft) as Record<string, unknown>);
+    } catch {
+      setConnectError("Config must be valid JSON (e.g. {\"baseUrl\": \"https://...\"}), or leave it as {}.");
+      return;
+    }
+
     setConnecting(true);
     try {
-      await api.post(`/tenants/${tenantId}/projects/${projectId}/integrations/${provider}/connect`, {
-        placeholderLabel: labelDraft,
+      await api.post<IntegrationConnectResponse>(`/tenants/${tenantId}/projects/${projectId}/integrations/${provider}/connect`, {
+        config,
+        ...(secretDraft.trim() ? { secret: secretDraft.trim() } : {}),
       });
-      setLabelDraft("");
+      setConfigDraft("{}");
+      setSecretDraft("");
       setConnectingProvider(null);
       await load();
     } catch (err) {
-      setConnectError(err instanceof ApiError ? err.message : "Could not record this placeholder setup.");
+      setConnectError(err instanceof ApiError ? err.message : "Could not save this integration.");
     } finally {
       setConnecting(false);
+    }
+  }
+
+  async function handleHealthCheck(provider: string) {
+    if (!tenantId || !projectId) return;
+    setHealthError(null);
+    setHealthCheckingProvider(provider);
+    try {
+      const res = await api.post<IntegrationHealthCheckResponse>(
+        `/tenants/${tenantId}/projects/${projectId}/integrations/${provider}/health-check`,
+      );
+      setHealthResults((prev) => ({ ...prev, [provider]: res }));
+      await load();
+    } catch (err) {
+      setHealthError(err instanceof ApiError ? err.message : "Could not run the health-check.");
+    } finally {
+      setHealthCheckingProvider(null);
     }
   }
 
@@ -105,67 +153,104 @@ export function IntegrationsPage() {
       <section className="panel">
         <h1>Integrations</h1>
         <p className="callout">
-          No provider below has a real, working connection yet — sending integration not yet connected. This page is
-          a registry of the providers this platform plans to support; "Record placeholder setup" only stores a label
-          you type in and marks the row "pending setup." It does not contact the provider, does not store a real API
-          key or secret, and does not enable any real send/sync.
+          Listmonk, Chatwoot, and Postiz support a real per-tenant connection: non-secret settings (e.g. baseUrl,
+          inboxId) plus an optional secret (API key/token) that's encrypted at rest before it's stored. Every other
+          provider below remains registry-only — there is no real external service behind it yet, even though
+          connecting it works the same way.
         </p>
         {note ? <p className="muted">{note}</p> : null}
 
         {integrations === null ? (
           <p className="muted">Loading...</p>
+        ) : integrations.length === 0 ? (
+          <EmptyState title="No providers configured" />
         ) : (
           <ul className="card-list card-list-static">
-            {integrations.map((integration) => (
-              <li key={integration.provider} className="card-list-item card-list-item-static">
-                <div>
-                  <strong>{integration.label}</strong>
-                  <span className="muted"> · {integration.category.replace("_", " ")}</span>
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                  <Badge tone={statusToneFor(integration.status)}>{statusLabelFor(integration.status)}</Badge>
-                  {integration.status === "not_connected" || integration.status === "error" ? (
-                    connectingProvider === integration.provider ? null : (
-                      <button
-                        type="button"
-                        className="btn btn-secondary btn-small"
-                        onClick={() => {
-                          setConnectingProvider(integration.provider);
-                          setConnectError(null);
-                          setLabelDraft("");
-                        }}
-                      >
-                        Record placeholder setup
-                      </button>
-                    )
-                  ) : (
-                    <span className="muted hint">Sending integration not yet connected</span>
-                  )}
-                </div>
-              </li>
-            ))}
+            {integrations.map((integration) => {
+              const health = healthResults[integration.provider];
+              return (
+                <li key={integration.provider} className="card-list-item card-list-item-static">
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4, width: "100%" }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                      <div>
+                        <strong>{integration.label}</strong>
+                        <span className="muted"> · {integration.category.replace("_", " ")}</span>
+                        {integration.real ? null : <span className="muted"> · registry only</span>}
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <Badge tone={statusToneFor(health?.status ?? integration.status)}>
+                          {statusLabelFor(health?.status ?? integration.status)}
+                        </Badge>
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-small"
+                          onClick={() => {
+                            setConnectingProvider(integration.provider);
+                            setConnectError(null);
+                            setConfigDraft(JSON.stringify(integration.config ?? {}, null, 2));
+                            setSecretDraft("");
+                          }}
+                        >
+                          {integration.status === "not_connected" ? "Connect" : "Edit"}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-small"
+                          disabled={healthCheckingProvider === integration.provider || integration.status === "not_connected"}
+                          onClick={() => handleHealthCheck(integration.provider)}
+                        >
+                          {healthCheckingProvider === integration.provider ? "Checking..." : "Check health"}
+                        </button>
+                      </div>
+                    </div>
+                    {integration.hasSecret ? (
+                      <span className="muted hint">A secret is on file (not shown).</span>
+                    ) : null}
+                    {health ? (
+                      <span className="muted hint">
+                        Last health-check: {statusLabelFor(health.status)}
+                        {health.detail ? ` — ${health.detail}` : ""}
+                        {health.note ? ` — ${health.note}` : ""}
+                      </span>
+                    ) : null}
+                  </div>
+                </li>
+              );
+            })}
           </ul>
         )}
+
+        <ErrorBanner message={healthError} />
 
         {connectingProvider ? (
           <form className="form" onSubmit={(e) => handleConnect(e, connectingProvider)}>
             <ErrorBanner message={connectError} />
             <p className="muted">
-              This is a placeholder only — type any label to identify the instance (e.g. an internal name). It is not
-              a real API key or secret, and nothing is actually sent to {connectingProvider}.
+              Config is non-secret settings as JSON (e.g. <code>{"{\"baseUrl\": \"https://chat.example.com\"}"}</code>
+              ). Secret is the real API key/token for {connectingProvider} — it's encrypted before being stored and
+              never shown back to you. Leave secret blank to update config only and keep the existing credential.
             </p>
             <label className="field">
-              <span>Placeholder label</span>
+              <span>Config (JSON)</span>
+              <textarea
+                rows={4}
+                value={configDraft}
+                onChange={(e) => setConfigDraft(e.target.value)}
+                placeholder='{"baseUrl": "https://..."}'
+              />
+            </label>
+            <label className="field">
+              <span>Secret (API key / token)</span>
               <input
-                required
-                value={labelDraft}
-                onChange={(e) => setLabelDraft(e.target.value)}
-                placeholder="e.g. acme-prod-instance"
+                type="password"
+                value={secretDraft}
+                onChange={(e) => setSecretDraft(e.target.value)}
+                placeholder="Leave blank to keep the existing credential"
               />
             </label>
             <div className="form-actions">
               <button type="submit" className="btn btn-primary" disabled={connecting}>
-                {connecting ? "Saving..." : "Record placeholder setup"}
+                {connecting ? "Saving..." : "Save"}
               </button>
               <button type="button" className="btn btn-secondary" onClick={() => setConnectingProvider(null)}>
                 Cancel

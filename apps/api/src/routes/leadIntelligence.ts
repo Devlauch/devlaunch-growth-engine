@@ -6,6 +6,8 @@ import { Errors } from "../lib/httpError.js";
 import { enrichLead } from "../lib/companyEnrichment.js";
 import { matchLeadToAllIcps } from "../lib/icpMatching.js";
 import { detectBuyingSignals } from "../lib/buyingSignals.js";
+import { recomputeLeadScore } from "./scoring.js";
+import { logger } from "../lib/logger.js";
 
 /**
  * Lead Intelligence: a complementary layer on top of the EXISTING
@@ -55,6 +57,20 @@ leadIntelligenceRouter.post("/enrich", async (req, res, next) => {
     await assertProjectInTenant(req, projectId);
 
     const result = await enrichLead(req.tenantDb!, req.tenantId!, projectId, leadId);
+
+    // Enrichment just added new evidence for this lead (company data that
+    // scoring_rubrics criteria can match against) — recompute its score now
+    // rather than waiting for a human to notice and hit /recompute, or for
+    // a periodic sweep to get to it. Awaited (not fire-and-forget) since it
+    // reuses this same request-scoped tenantDb client; best-effort in that
+    // a scoring failure here must never fail the enrichment request that
+    // already succeeded.
+    try {
+      await recomputeLeadScore(req.tenantDb!, req.tenantId!, projectId, leadId);
+    } catch (err) {
+      logger.error({ err, leadId, projectId }, "lead score recompute after enrichment failed");
+    }
+
     res.status(201).json({ enrichment: result.enrichment });
   } catch (err) {
     next(err);

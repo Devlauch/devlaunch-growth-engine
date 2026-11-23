@@ -3,8 +3,9 @@ import { z } from "zod";
 import { requireAuth } from "../middleware/auth.js";
 import { requireTenantMembership } from "../middleware/tenant.js";
 import { Errors } from "../lib/httpError.js";
-import { draftMessage, type DraftMessageChannel } from "../lib/draftMessage.js";
+import { draftMessage, type DraftMessageChannel, type DraftMessageEvidence } from "../lib/draftMessage.js";
 import { checkSendEligibility, type SendEligibilityResult } from "../lib/suppression.js";
+import { loadLeadEvidence } from "../lib/leadEvidence.js";
 
 /**
  * Mounted at
@@ -18,18 +19,25 @@ import { checkSendEligibility, type SendEligibilityResult } from "../lib/suppres
  * its own `approval_id` FK the same way campaigns carries `campaign_id` on
  * `approvals`.
  *
- * Evidence/approvedClaims input: this route accepts `approvedClaims` and
- * `evidenceFacts`/`evidenceSummary` directly in the POST / body rather than
- * assembling them automatically from discovered_organizations/
- * discovered_contacts. Chosen deliberately over auto-assembly (like
- * scoring.ts's /recompute does for rubric criteria) because: (a) approved
- * claims are inherently tenant/offer-specific marketing copy decisions, not
- * something derivable from lead data at all, and (b) auto-assembling
- * evidence facts would duplicate the same heuristic matching
- * scoring.ts already has, for comparatively low benefit at this stage —
- * callers (e.g. a future "draft from lead" UI action) are expected to pull
- * evidence from the lead/discovery data themselves and pass it in. This is
- * a documented simplification, not an oversight.
+ * Evidence/approvedClaims input: `approvedClaims` always comes from the POST
+ * / body — approved claims are inherently tenant/offer-specific marketing
+ * copy decisions, never derivable from lead data, so there is nothing to
+ * auto-assemble there. `evidenceSummary`/`evidenceFacts`, however, are now
+ * OPTIONAL: when omitted, this route auto-assembles them from the lead's own
+ * real, already-computed evidence (lead_scores' rubric criteria evidence,
+ * buying_signals, icp_match_scores — see lib/leadEvidence.ts, which reads
+ * the exact same three sources routes/leadIntelligence.ts's GET /explain
+ * already surfaces read-only) rather than requiring a human to re-type
+ * evidence that already exists on the lead. This is the fix for a real
+ * personalization gap: previously, every draft for a lead needed identical
+ * manually-pasted evidence regardless of what had actually changed for that
+ * lead (a new buying signal detected, a rescored rubric, a new ICP match) —
+ * now the draft reflects the lead's CURRENT real evidence automatically. A
+ * caller can still pass evidenceSummary explicitly to override
+ * auto-assembly (e.g. a human has better context than the stored evidence);
+ * when neither an explicit evidenceSummary nor any real stored evidence
+ * exists yet for the lead, drafting is refused with a 400 rather than
+ * fabricating evidence out of nothing.
  *
  * Send eligibility: drafting is never blocked by suppression/consent (an
  * ineligible lead can still get an evidence-based draft prepared for
@@ -100,7 +108,12 @@ async function assembleSendEligibility(
 const createDraftSchema = z.object({
   leadId: z.string().uuid(),
   approvedClaims: z.array(z.string().trim().min(1).max(500)).default([]),
-  evidenceSummary: z.string().trim().min(1).max(5000),
+  // Both now optional: when evidenceSummary is omitted, this route
+  // auto-assembles real evidence from the lead's own lead_scores/
+  // buying_signals/icp_match_scores rows (see lib/leadEvidence.ts). Passing
+  // evidenceSummary explicitly still works exactly as before and always
+  // takes priority over auto-assembly.
+  evidenceSummary: z.string().trim().min(1).max(5000).optional(),
   evidenceFacts: z.array(z.string().trim().min(1).max(1000)).default([]),
   senderIdentity: z.string().trim().min(1).max(300).optional(),
 });
@@ -115,10 +128,24 @@ messageDraftsRouter.post("/", async (req, res, next) => {
     const lead = await loadLeadOr404(req, projectId, body.leadId);
     const sendEligibility = await assembleSendEligibility(req, lead);
 
-    const { variants, unsourcedClaims } = draftMessage(body.approvedClaims, {
-      summary: body.evidenceSummary,
-      facts: body.evidenceFacts,
-    });
+    let evidence: DraftMessageEvidence;
+    let evidenceAutoAssembled = false;
+    if (body.evidenceSummary) {
+      evidence = { summary: body.evidenceSummary, facts: body.evidenceFacts };
+    } else {
+      const assembled = await loadLeadEvidence(req.tenantDb!, req.tenantId!, projectId, body.leadId);
+      if (!assembled) {
+        throw Errors.badRequest(
+          "No evidenceSummary was provided, and this lead has no lead score, buying signal, or ICP match yet to " +
+            "auto-assemble evidence from. Supply evidenceSummary/evidenceFacts explicitly, or compute a lead score " +
+            "(POST .../lead-scores/:leadId/recompute), detect buying signals, or run ICP matching for this lead first.",
+        );
+      }
+      evidence = assembled;
+      evidenceAutoAssembled = true;
+    }
+
+    const { variants, unsourcedClaims } = draftMessage(body.approvedClaims, evidence);
 
     const senderIdentity = body.senderIdentity ?? "Unconfigured sender identity (no sending integration connected)";
     const recipientDisplay =
@@ -130,7 +157,7 @@ messageDraftsRouter.post("/", async (req, res, next) => {
       `INSERT INTO message_drafts (tenant_id, project_id, lead_id, evidence_summary, unsourced_claims, created_by)
        VALUES ($1, $2, $3, $4, $5::jsonb, $6)
        RETURNING ${MESSAGE_DRAFT_COLUMNS}`,
-      [req.tenantId, projectId, body.leadId, body.evidenceSummary, JSON.stringify(unsourcedClaims), req.userId],
+      [req.tenantId, projectId, body.leadId, evidence.summary, JSON.stringify(unsourcedClaims), req.userId],
     );
     const draft = draftResult.rows[0];
 
@@ -156,10 +183,10 @@ messageDraftsRouter.post("/", async (req, res, next) => {
     await req.tenantDb!.query(
       `INSERT INTO audit_events (tenant_id, actor_type, actor_user_id, action, entity_type, entity_id, metadata)
        VALUES ($1, 'user', $2, 'message_draft.created', 'message_draft', $3, $4::jsonb)`,
-      [req.tenantId, req.userId, draft.id, JSON.stringify({ leadId: body.leadId, unsourcedClaims })],
+      [req.tenantId, req.userId, draft.id, JSON.stringify({ leadId: body.leadId, unsourcedClaims, evidenceAutoAssembled })],
     );
 
-    res.status(201).json({ messageDraft: draft, variants: variantRows, sendEligibility });
+    res.status(201).json({ messageDraft: draft, variants: variantRows, sendEligibility, evidenceAutoAssembled });
   } catch (err) {
     next(err);
   }

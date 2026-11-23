@@ -5,6 +5,7 @@ import { requireTenantMembership } from "../middleware/tenant.js";
 import { Errors } from "../lib/httpError.js";
 import { PLAN_LIMITS, PLAN_NAMES } from "../config/planLimits.js";
 import { getQuotaUsage, QUOTA_RESOURCES } from "../lib/quota.js";
+import { applyPlanChange } from "../lib/billingPlanSync.js";
 
 export const planRouter = Router({ mergeParams: true });
 planRouter.use(requireAuth, requireTenantMembership);
@@ -57,30 +58,32 @@ const patchPlanSchema = z.object({
  * PATCH /api/v1/tenants/:tenantId/plan — owner-only.
  *
  * MANUAL / ADMIN ACTION ONLY. This endpoint does not charge a card, call a
- * payment provider, or process any real billing event of any kind — there
- * is no payment integration anywhere in this codebase. It simply updates
- * the tenant's `plan` column, standing in for whatever out-of-band manual
- * process (an invoice, a signed contract, a support ticket) actually moved
- * the tenant to a new plan. Never present this as "processing a payment".
+ * payment provider, or process any real billing event of any kind by
+ * itself — it simply updates the tenant's `plan` column, standing in for
+ * whatever out-of-band manual process (an invoice, a signed contract, a
+ * support ticket) actually moved the tenant to a new plan, OR for an
+ * admin's manual override of what a real billing-provider webhook already
+ * set (see routes/billingWebhooks.ts, Milestone 4) — this manual path
+ * remains available and unchanged as a fallback/override, it is not
+ * replaced by billing-provider automation. Never present this as
+ * "processing a payment".
+ *
+ * Shares its actual plan-write + audit-trail logic with the
+ * webhook-driven path via applyPlanChange() (lib/billingPlanSync.ts) —
+ * extracted additively out of what used to be inline here; same SQL, same
+ * params, same behavior as before.
  */
 planRouter.patch("/", async (req, res, next) => {
   try {
     requireRole(req, ["owner"]);
     const body = patchPlanSchema.parse(req.body);
 
-    const result = await req.tenantDb!.query(
-      `UPDATE tenants SET plan = $2 WHERE id = $1 RETURNING id, slug, name, plan`,
-      [req.tenantId, body.plan],
-    );
-    if (result.rowCount === 0) throw Errors.notFound("Tenant not found");
+    const tenant = await applyPlanChange(req.tenantDb!, req.tenantId as string, body.plan, {
+      type: "user",
+      userId: req.userId as string,
+    });
 
-    await req.tenantDb!.query(
-      `INSERT INTO audit_events (tenant_id, actor_type, actor_user_id, action, entity_type, entity_id, metadata)
-       VALUES ($1, 'user', $2, 'tenant.plan_changed', 'tenant', $1, $3::jsonb)`,
-      [req.tenantId, req.userId, JSON.stringify({ newPlan: body.plan })],
-    );
-
-    res.json({ tenant: result.rows[0] });
+    res.json({ tenant });
   } catch (err) {
     next(err);
   }

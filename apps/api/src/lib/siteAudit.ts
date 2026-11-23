@@ -10,7 +10,21 @@
  * dependency on apps/worker, so these are small, deliberately duplicated
  * equivalents (same precedent as scoreLead.ts mirroring leadScoring.ts)
  * rather than a cross-package import.
+ *
+ * SSRF guard: every fetch below targets a tenant-supplied `domain` directly
+ * (no Crawl4AI process boundary in between), so `fetchImpl` defaults to
+ * `safeFetch` (../lib/ssrfGuard.ts) rather than bare `fetch` — real DNS
+ * A/AAAA validation against private/loopback/link-local/metadata ranges,
+ * plus a pinned-IP connection and re-validated redirect-following to close
+ * the DNS-rebinding TOCTOU gap. Still injectable (tests pass a fake
+ * fetchImpl), same convention as before.
  */
+import { safeFetch, type SafeFetchInit, type SafeFetchResponse } from "./ssrfGuard.js";
+
+/** Structural supertype of both `safeFetch` and global `fetch` — lets
+ * `fetchImpl` default to the SSRF-hardened `safeFetch` while tests keep
+ * injecting a plain mock function (or real `fetch`) as before. */
+export type FetchLike = (url: string, init?: SafeFetchInit) => Promise<SafeFetchResponse | Response>;
 
 export type IssueType =
   | "broken_link"
@@ -68,7 +82,7 @@ function toRootUrl(domain: string): string {
  * here, same spirit as websiteCrawler.ts's stripHtml/extractTitle regexes.
  * Caps at MAX_SITEMAP_URLS to avoid auditing a huge site in one request.
  */
-export async function fetchSitemap(domain: string, fetchImpl: typeof fetch = fetch): Promise<SitemapResult> {
+export async function fetchSitemap(domain: string, fetchImpl: FetchLike = safeFetch): Promise<SitemapResult> {
   const sitemapUrl = new URL("/sitemap.xml", toRootUrl(domain)).toString();
   try {
     const res = await fetchImpl(sitemapUrl, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
@@ -88,7 +102,7 @@ export async function fetchSitemap(domain: string, fetchImpl: typeof fetch = fet
 }
 
 /** Real `fetch(https://{domain}/robots.txt)` — 200 means found. */
-export async function checkRobotsTxt(domain: string, fetchImpl: typeof fetch = fetch): Promise<boolean> {
+export async function checkRobotsTxt(domain: string, fetchImpl: FetchLike = safeFetch): Promise<boolean> {
   const robotsUrl = new URL("/robots.txt", toRootUrl(domain)).toString();
   try {
     const res = await fetchImpl(robotsUrl, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
@@ -103,7 +117,7 @@ export async function checkRobotsTxt(domain: string, fetchImpl: typeof fetch = f
  * a 405) with a short timeout. Never throws — a network error is reported
  * as `{ ok: false, status: 0 }` rather than propagating.
  */
-export async function checkLinkStatus(url: string, fetchImpl: typeof fetch = fetch): Promise<LinkStatusResult> {
+export async function checkLinkStatus(url: string, fetchImpl: FetchLike = safeFetch): Promise<LinkStatusResult> {
   try {
     const headRes = await fetchImpl(url, { method: "HEAD", signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
     if (headRes.status === 405) {
@@ -199,7 +213,7 @@ async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T)
 }
 
 export interface RunSiteAuditOptions {
-  fetchImpl?: typeof fetch;
+  fetchImpl?: FetchLike;
 }
 
 /**
@@ -210,7 +224,7 @@ export interface RunSiteAuditOptions {
  * issue and the audit continues.
  */
 export async function runSiteAudit(domain: string, options: RunSiteAuditOptions = {}): Promise<RunSiteAuditResult> {
-  const fetchImpl = options.fetchImpl ?? fetch;
+  const fetchImpl = options.fetchImpl ?? safeFetch;
   const root = toRootUrl(domain);
 
   const [sitemap, robotsFound] = await Promise.all([

@@ -233,18 +233,29 @@ export interface UsageOverview {
   perDay: UsagePerDay[];
 }
 
-export type IntegrationProvider = "twenty" | "mautic" | "postiz" | "listmonk" | "posthog" | "formbricks";
+export type IntegrationProvider =
+  | "twenty"
+  | "mautic"
+  | "postiz"
+  | "listmonk"
+  | "posthog"
+  | "formbricks"
+  | "chatwoot";
 export type IntegrationStatus = "not_connected" | "pending_setup" | "connected" | "error";
 
 // GET /tenants/:tenantId/projects/:projectId/integrations — a registry
-// entry, never a working live connection in this phase (see
-// apps/api/src/routes/integrations.ts).
+// entry. Milestone 2: listmonk/chatwoot/postiz support a real per-tenant
+// connection (encrypted credential + health-check); every other provider
+// remains registry-only (see apps/api/src/routes/integrations.ts).
 export interface IntegrationEntry {
   provider: IntegrationProvider;
   label: string;
   category: string;
   status: IntegrationStatus;
   scopes: string[];
+  config: Record<string, unknown>;
+  hasSecret: boolean;
+  real: boolean;
   updatedAt: string | null;
 }
 
@@ -343,6 +354,51 @@ export interface PlanUsageResponse {
   usage: Record<QuotaResource, QuotaUsageEntry>;
 }
 
+// Milestone 4 (P3): real SaaS billing (see apps/api/src/routes/billing.ts).
+// No real Razorpay/Stripe keys exist in this environment — these types
+// describe the real (possibly not_configured) responses that route
+// returns; BillingPage.tsx never fabricates a value for any of these.
+export type BillingProviderName = "razorpay" | "stripe" | "not_configured";
+
+export type BillingSubscriptionStatus = "trialing" | "active" | "past_due" | "canceled" | "incomplete";
+
+export interface BillingSubscription {
+  provider: "razorpay" | "stripe";
+  provider_subscription_id: string;
+  plan_id: PlanName;
+  status: BillingSubscriptionStatus;
+  current_period_end: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BillingOverageEvent {
+  id: string;
+  resource: QuotaResource;
+  plan: PlanName;
+  limitAtTime: number;
+  usageAtTime: number;
+  recordedAt: string;
+}
+
+export interface BillingStatusResponse {
+  activeProvider: BillingProviderName;
+  providerConfigured: boolean;
+  subscription: BillingSubscription | null;
+  unbilledOverageEvents: BillingOverageEvent[];
+}
+
+export interface BillingInvoice {
+  id: string;
+  provider: "razorpay" | "stripe";
+  provider_invoice_id: string;
+  amount: number;
+  currency: string;
+  status: "paid" | "open" | "failed" | "void";
+  issued_at: string;
+  paid_at: string | null;
+}
+
 export type ReportStatus = "queued" | "running" | "succeeded" | "failed";
 
 export interface GeneratedReport {
@@ -379,4 +435,207 @@ export interface ReportSchedule {
   last_generated_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+// CRM module: first-class companies/contacts (packages/db/migrations
+// 302_create_companies.sql / 307_create_contacts.sql), distinct from
+// leads.company (free text) and leads themselves.
+export interface Company {
+  id: string;
+  tenant_id: string;
+  project_id: string;
+  name: string;
+  domain: string | null;
+  industry: string | null;
+  size_range: string | null;
+  notes: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Contact {
+  id: string;
+  tenant_id: string;
+  project_id: string;
+  company_id: string | null;
+  lead_id: string | null;
+  name: string;
+  email: string | null;
+  phone: string | null;
+  title: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// POST /tenants/:tenantId/projects/:projectId/integrations/:provider/connect
+export interface IntegrationConnectResponse {
+  integration: {
+    id: string;
+    provider: IntegrationProvider;
+    status: IntegrationStatus;
+    scopes: string[];
+    config: Record<string, unknown>;
+    created_at: string;
+    updated_at: string;
+  };
+  note: string;
+}
+
+// POST /tenants/:tenantId/projects/:projectId/integrations/:provider/health-check
+// `status` is "integration_not_yet_implemented" when the real
+// listmonk/chatwoot/postiz client doesn't exist yet in this environment —
+// an honest "not built" response, never a fabricated success (see
+// apps/api/src/routes/integrations.ts).
+export interface IntegrationHealthCheckResponse {
+  provider: IntegrationProvider;
+  status: IntegrationStatus | "integration_not_yet_implemented";
+  detail?: string;
+  note?: string;
+}
+
+export type ProspectingCampaignStatus = "draft" | "running" | "paused" | "completed";
+
+export interface ProspectingCampaign {
+  id: string;
+  tenant_id: string;
+  project_id: string;
+  name: string;
+  goal: string | null;
+  icp_profile_id: string | null;
+  status: ProspectingCampaignStatus;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProspectingCampaignSource {
+  id: string;
+  discovery_source_id: string;
+  priority: number;
+  name: string;
+  connector_type: DiscoveryConnectorType;
+  enabled: boolean;
+}
+
+export interface ProspectingCampaignResultsSummary {
+  organizationsFound: number;
+  contactsFound: number;
+  leadsCreated: number;
+  leadsQualified: number;
+}
+
+// DevLaunch's own internal customer-acquisition workspace (not a client
+// tenant feature) — see apps/api/src/routes/publicGrowth.ts /
+// internalGrowth.ts, packages/db/migrations 421-427.
+
+export interface GrowthAuditRequest {
+  id: string;
+  domain: string;
+  email: string;
+  lead_id: string | null;
+  growth_analysis_id: string | null;
+  report_id: string | null;
+  status: "completed" | "partial" | "failed";
+  created_at: string;
+  growth_plan_summary: string | null;
+  report_status: string | null;
+}
+
+export interface DemoRequest {
+  id: string;
+  name: string;
+  email: string;
+  company: string | null;
+  message: string | null;
+  lead_id: string | null;
+  created_at: string;
+}
+
+export type TrialSignupStatus = "trial_started" | "trial_active" | "converted" | "churned";
+
+export interface TrialSignup {
+  id: string;
+  tenant_id: string;
+  project_id: string;
+  lead_id: string | null;
+  company_name: string | null;
+  contact_email: string;
+  source: "growth_audit" | "demo_request" | "manual";
+  status: TrialSignupStatus;
+  notes: string | null;
+  started_at: string;
+  converted_at: string | null;
+  converted_by: string | null;
+  churned_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AcquisitionCost {
+  id: string;
+  tenant_id: string;
+  project_id: string;
+  channel: string;
+  period_start: string;
+  period_end: string;
+  amount_cents: number;
+  notes: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CacResult {
+  periodStart: string;
+  periodEnd: string;
+  totalCostCents: number;
+  convertedCount: number;
+  cacCents: number | null;
+  reason: "insufficient_data" | null;
+}
+
+// AI Growth Advisor (apps/api/src/lib/growthAdvisor.ts /
+// apps/api/src/routes/growthAdvisor.ts). Distinct from, and not to be
+// confused with, GrowthAnalysis/its own `growth_recommendations` above —
+// this is a different feature, backed by a separate
+// `growth_advisor_recommendations` table (see
+// packages/db/migrations/432_create_growth_advisor_recommendations.sql).
+export type GrowthAdvisorRecommendationStatus = "new" | "acknowledged" | "dismissed" | "actioned";
+export type GrowthAdvisorSeverity = "low" | "medium" | "high";
+
+export interface GrowthAdvisorRecommendation {
+  id: string;
+  tenant_id: string;
+  project_id: string;
+  rule_key: string;
+  severity: GrowthAdvisorSeverity;
+  title: string;
+  description: string;
+  evidence: Record<string, unknown>;
+  status: GrowthAdvisorRecommendationStatus;
+  suggested_action: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GrowthAdvisorAction {
+  id: string;
+  tenant_id: string;
+  project_id: string;
+  recommendation_id: string;
+  action_type: "auto_assign_leads";
+  payload: { leadIds: string[] };
+  status: "pending_approval" | "approved" | "rejected";
+  created_at: string;
+}
+
+export interface GrowthAdvisorPreparedApproval {
+  id: string;
+  growth_advisor_action_id: string;
+  status: string;
+  requested_by: string | null;
+  requested_at: string;
 }

@@ -62,6 +62,40 @@ interface KeywordRanking {
   checked_at: string;
 }
 
+// Local shapes for apps/api/src/routes/seoCampaigns.ts and
+// ../lib/keywordClustering.ts/internalLinking.ts — deliberately not added
+// to ../api/types.ts, same file-boundary convention as the interfaces
+// above.
+interface KeywordClusterItem {
+  keyword: string;
+  frequency: number;
+}
+
+interface KeywordCluster {
+  clusterKey: string;
+  label: string;
+  keywords: KeywordClusterItem[];
+  totalFrequency: number;
+}
+
+interface SeoCampaign {
+  id: string;
+  name: string;
+  domain: string | null;
+  target_keywords: string[];
+  status: "active" | "paused" | "completed";
+  created_at: string;
+}
+
+interface InternalLinkSuggestion {
+  fromUrl: string;
+  toUrl: string;
+  clusterLabel: string;
+  sharedKeywords: string[];
+  reason: string;
+  matchesCampaign: boolean;
+}
+
 function severityTone(severity: SeoAuditIssue["severity"]): "neutral" | "info" | "success" | "warn" | "danger" {
   switch (severity) {
     case "high":
@@ -94,19 +128,42 @@ export function SeoAuditPage() {
   const [trackingKeyword, setTrackingKeyword] = useState(false);
   const [trackError, setTrackError] = useState<string | null>(null);
 
+  // SEO campaigns + keyword clustering
+  const [clusters, setClusters] = useState<KeywordCluster[] | null>(null);
+  const [clustersNote, setClustersNote] = useState<string | null>(null);
+  const [campaigns, setCampaigns] = useState<SeoCampaign[] | null>(null);
+  const [campaignName, setCampaignName] = useState("");
+  const [selectedClusterKey, setSelectedClusterKey] = useState<string>("");
+  const [creatingCampaign, setCreatingCampaign] = useState(false);
+  const [campaignError, setCampaignError] = useState<string | null>(null);
+
+  // Internal link suggestions
+  const [linkSuggestions, setLinkSuggestions] = useState<InternalLinkSuggestion[] | null>(null);
+  const [linkSuggestDomain, setLinkSuggestDomain] = useState("");
+  const [loadingLinkSuggestions, setLoadingLinkSuggestions] = useState(false);
+  const [linkSuggestError, setLinkSuggestError] = useState<string | null>(null);
+  const [activeCampaignId, setActiveCampaignId] = useState<string | null>(null);
+
   const load = useCallback(async () => {
     if (!tenantId || !projectId) return;
     try {
-      const [projectRes, auditsRes, rankingsRes] = await Promise.all([
+      const [projectRes, auditsRes, rankingsRes, clustersRes, campaignsRes] = await Promise.all([
         api.get<{ project: Project }>(`/tenants/${tenantId}/projects/${projectId}`),
         api.get<{ audits: SeoAudit[] }>(`/tenants/${tenantId}/projects/${projectId}/seo/audits`),
         api.get<{ keywordRankings: KeywordRanking[] }>(
           `/tenants/${tenantId}/projects/${projectId}/seo/keyword-rankings`,
         ),
+        api.get<{ clusters: KeywordCluster[]; note: string }>(
+          `/tenants/${tenantId}/projects/${projectId}/seo-campaigns/keyword-clusters`,
+        ),
+        api.get<{ campaigns: SeoCampaign[] }>(`/tenants/${tenantId}/projects/${projectId}/seo-campaigns`),
       ]);
       setProject(projectRes.project);
       setAudits(auditsRes.audits);
       setRankings(rankingsRes.keywordRankings);
+      setClusters(clustersRes.clusters);
+      setClustersNote(clustersRes.note);
+      setCampaigns(campaignsRes.campaigns);
     } catch (err) {
       setLoadError(err instanceof ApiError ? err.message : "Could not load SEO data for this project.");
     }
@@ -115,6 +172,48 @@ export function SeoAuditPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  async function handleCreateCampaign(e: FormEvent) {
+    e.preventDefault();
+    if (!tenantId || !projectId) return;
+    setCampaignError(null);
+    setCreatingCampaign(true);
+    try {
+      const res = await api.post<{ campaign: SeoCampaign }>(
+        `/tenants/${tenantId}/projects/${projectId}/seo-campaigns`,
+        { name: campaignName.trim(), clusterKey: selectedClusterKey },
+      );
+      setCampaigns((prev) => [res.campaign, ...(prev ?? [])]);
+      setCampaignName("");
+      setSelectedClusterKey("");
+    } catch (err) {
+      setCampaignError(err instanceof ApiError ? err.message : "Could not create this SEO campaign.");
+    } finally {
+      setCreatingCampaign(false);
+    }
+  }
+
+  async function handleGetLinkSuggestions(campaignId: string, e: FormEvent) {
+    e.preventDefault();
+    if (!tenantId || !projectId) return;
+    setLinkSuggestError(null);
+    setLinkSuggestions(null);
+    setActiveCampaignId(campaignId);
+    setLoadingLinkSuggestions(true);
+    try {
+      const res = await api.post<{ suggestions: InternalLinkSuggestion[]; pagesCrawled: number }>(
+        `/tenants/${tenantId}/projects/${projectId}/seo-campaigns/${campaignId}/internal-link-suggestions`,
+        linkSuggestDomain.trim() ? { domain: linkSuggestDomain.trim() } : {},
+      );
+      setLinkSuggestions(res.suggestions);
+    } catch (err) {
+      setLinkSuggestError(
+        err instanceof ApiError ? err.message : "Could not compute internal-linking suggestions.",
+      );
+    } finally {
+      setLoadingLinkSuggestions(false);
+    }
+  }
 
   const loadAuditDetail = useCallback(
     async (auditId: string) => {
@@ -420,6 +519,143 @@ export function SeoAuditPage() {
               </tbody>
             </table>
           </div>
+        )}
+      </section>
+
+      <section className="panel">
+        <h2>Keyword clusters</h2>
+        <p className="callout">
+          Groups this project's own real, already-extracted keywords (from the Growth Analyzer's crawl) using a
+          deterministic stem + shared-substring heuristic — never an embedding/ML model. {clustersNote ?? ""}
+        </p>
+        {clusters === null ? (
+          <p className="muted">Loading...</p>
+        ) : clusters.length === 0 ? (
+          <EmptyState
+            title="No keyword clusters yet"
+            hint="Run a Growth Analyzer analysis for this project to extract real keywords to cluster."
+          />
+        ) : (
+          <ul className="card-list card-list-static">
+            {clusters.map((c) => (
+              <li key={c.clusterKey} className="card-list-item-static">
+                <strong>{c.label}</strong>
+                <span className="muted"> · {c.keywords.length} keyword(s), total frequency {c.totalFrequency}</span>
+                <div>{c.keywords.map((k) => k.keyword).join(", ")}</div>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <h2>SEO campaigns</h2>
+        <p className="callout">
+          Pick a keyword cluster above to start tracking real content-publishing and technical-SEO progress against
+          it over time.
+        </p>
+        <form className="form" onSubmit={handleCreateCampaign}>
+          <ErrorBanner message={campaignError} />
+          <label className="field">
+            <span>Campaign name</span>
+            <input required value={campaignName} onChange={(e) => setCampaignName(e.target.value)} />
+          </label>
+          <label className="field">
+            <span>Target cluster</span>
+            <select required value={selectedClusterKey} onChange={(e) => setSelectedClusterKey(e.target.value)}>
+              <option value="">Choose a cluster...</option>
+              {(clusters ?? []).map((c) => (
+                <option key={c.clusterKey} value={c.clusterKey}>
+                  {c.label} ({c.keywords.length} keywords)
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="form-actions">
+            <button type="submit" className="btn btn-primary" disabled={creatingCampaign || !selectedClusterKey}>
+              {creatingCampaign ? "Creating..." : "Create campaign"}
+            </button>
+          </div>
+        </form>
+
+        {campaigns === null ? (
+          <p className="muted">Loading...</p>
+        ) : campaigns.length === 0 ? (
+          <EmptyState title="No SEO campaigns yet" hint="Create one above from a keyword cluster." />
+        ) : (
+          <ul className="card-list card-list-static">
+            {campaigns.map((c) => (
+              <li key={c.id} className="card-list-item-static" style={{ display: "block" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 6 }}>
+                  <strong>{c.name}</strong>
+                  <Badge tone={c.status === "active" ? "success" : c.status === "paused" ? "warn" : "neutral"}>
+                    {c.status}
+                  </Badge>
+                  <span className="muted">targets: {c.target_keywords.join(", ")}</span>
+                </div>
+                <form className="form" onSubmit={(e) => handleGetLinkSuggestions(c.id, e)}>
+                  <label className="field">
+                    <span>Domain (optional if the campaign already has one)</span>
+                    <input
+                      value={linkSuggestDomain}
+                      onChange={(e) => setLinkSuggestDomain(e.target.value)}
+                      placeholder={c.domain ?? "e.g. example.com"}
+                    />
+                  </label>
+                  <div className="form-actions">
+                    <button
+                      type="submit"
+                      className="btn btn-secondary btn-small"
+                      disabled={loadingLinkSuggestions && activeCampaignId === c.id}
+                    >
+                      {loadingLinkSuggestions && activeCampaignId === c.id
+                        ? "Analyzing..."
+                        : "Get internal-link suggestions"}
+                    </button>
+                  </div>
+                </form>
+
+                {activeCampaignId === c.id && (
+                  <>
+                    <ErrorBanner message={linkSuggestError} />
+                    {linkSuggestions === null ? null : linkSuggestions.length === 0 ? (
+                      <EmptyState
+                        title="No internal-link suggestions found"
+                        hint="Either the crawled pages already link to each other, or no shared keyword clusters were found across pages."
+                      />
+                    ) : (
+                      <div className="table-wrap">
+                        <table className="table">
+                          <thead>
+                            <tr>
+                              <th>From</th>
+                              <th>To</th>
+                              <th>Shared cluster</th>
+                              <th>Matches campaign</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {linkSuggestions.map((s, i) => (
+                              <tr key={i}>
+                                <td>{s.fromUrl}</td>
+                                <td>{s.toUrl}</td>
+                                <td>
+                                  {s.clusterLabel} ({s.sharedKeywords.join(", ")})
+                                </td>
+                                <td>
+                                  <Badge tone={s.matchesCampaign ? "success" : "neutral"}>
+                                    {s.matchesCampaign ? "yes" : "no"}
+                                  </Badge>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </>
+                )}
+              </li>
+            ))}
+          </ul>
         )}
       </section>
     </Layout>

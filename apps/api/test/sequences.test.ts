@@ -102,13 +102,14 @@ describe("sequence + steps creation", () => {
 });
 
 describe("sequence enrollment", () => {
-  it("enrolls a lead as 'active' at current_step_order 0", async () => {
+  it("enrolls a lead as 'active' at current_step_order 0 with the standard (1x) cadence when unscored", async () => {
     const app = buildApp();
     queueResponses([
       ...mockMembership(),
       { rowCount: 1, rows: [{ id: SEQUENCE_1, tenant_id: TENANT_A, project_id: PROJECT_1, name: "Outbound v1" }] }, // loadSequenceOr404
-      { rowCount: 1, rows: [{}] }, // lead exists
+      { rowCount: 1, rows: [{ status: "new" }] }, // lead exists
       { rowCount: 0, rows: [] }, // existing enrollment check: none
+      { rowCount: 0, rows: [] }, // no lead_scores row yet -> standard cadence
       {
         rowCount: 1,
         rows: [
@@ -119,6 +120,7 @@ describe("sequence enrollment", () => {
             lead_id: LEAD_1,
             status: "active",
             current_step_order: 0,
+            cadence_multiplier: "1",
           },
         ],
       }, // INSERT enrollment
@@ -132,6 +134,51 @@ describe("sequence enrollment", () => {
     expect(res.status).toBe(201);
     expect(res.body.enrollment.status).toBe("active");
     expect(res.body.enrollment.current_step_order).toBe(0);
+    expect(res.body.cadence).toEqual({ multiplier: 1, tier: "standard", reason: expect.any(String) });
+
+    const insertCall = queryMock.mock.calls.find(
+      ([sql]) => typeof sql === "string" && sql.includes("INSERT INTO sequence_enrollments"),
+    );
+    expect(insertCall![1]).toEqual([TENANT_A, SEQUENCE_1, LEAD_1, 1]);
+  });
+
+  it("accelerates cadence (multiplier 0.5) when the lead's score is at/above the high-priority threshold", async () => {
+    const app = buildApp();
+    queueResponses([
+      ...mockMembership(),
+      { rowCount: 1, rows: [{ id: SEQUENCE_1, tenant_id: TENANT_A, project_id: PROJECT_1, name: "Outbound v1" }] }, // loadSequenceOr404
+      { rowCount: 1, rows: [{ status: "new" }] }, // lead exists
+      { rowCount: 0, rows: [] }, // existing enrollment check: none
+      { rowCount: 1, rows: [{ total_score: 85 }] }, // high-scoring lead_scores row
+      {
+        rowCount: 1,
+        rows: [
+          {
+            id: ENROLLMENT_1,
+            tenant_id: TENANT_A,
+            sequence_id: SEQUENCE_1,
+            lead_id: LEAD_1,
+            status: "active",
+            current_step_order: 0,
+            cadence_multiplier: "0.5",
+          },
+        ],
+      }, // INSERT enrollment
+    ]);
+
+    const res = await request(app)
+      .post(`/api/v1/tenants/${TENANT_A}/projects/${PROJECT_1}/sequences/${SEQUENCE_1}/enrollments`)
+      .set("X-Dev-User-Id", USER_1)
+      .send({ leadId: LEAD_1 });
+
+    expect(res.status).toBe(201);
+    expect(res.body.cadence.multiplier).toBe(0.5);
+    expect(res.body.cadence.tier).toBe("accelerated_high_priority");
+
+    const insertCall = queryMock.mock.calls.find(
+      ([sql]) => typeof sql === "string" && sql.includes("INSERT INTO sequence_enrollments"),
+    );
+    expect(insertCall![1]).toEqual([TENANT_A, SEQUENCE_1, LEAD_1, 0.5]);
   });
 
   it("rejects (409) re-enrolling a lead already enrolled in the same sequence, respecting the unique constraint, without issuing the INSERT", async () => {
@@ -206,23 +253,38 @@ describe("advanceDueEnrollments", () => {
   it("queries due enrollments by enrolled_at + day_offset, and no-ops when nothing is due", async () => {
     queueResponses([
       { rowCount: 0, rows: [] }, // UPDATE ... completed
+      { rowCount: 0, rows: [] }, // UPDATE ... stop-for-reply
       { rowCount: 0, rows: [] }, // SELECT due enrollments: none due
     ]);
 
     const result = await advanceDueEnrollments(fakeTenantDb() as never, TENANT_A, PROJECT_1);
 
-    expect(result).toEqual({ advanced: 0, tasksCreated: 0, skipped: [] });
+    expect(result).toEqual({
+      advanced: 0,
+      tasksCreated: 0,
+      skipped: [],
+      stoppedForReply: 0,
+      emailsSent: 0,
+      whatsappSent: 0,
+    });
     const dueCall = queryMock.mock.calls.find(
       ([sql]) => typeof sql === "string" && sql.includes("now() >= se.enrolled_at + (ss.day_offset"),
     );
     expect(dueCall).toBeDefined();
     expect(dueCall![1]).toEqual([TENANT_A, PROJECT_1]);
+    // Phase 6a: the due-check now factors in each enrollment's own
+    // cadence_multiplier (554_add_cadence_multiplier_to_sequence_enrollments.sql),
+    // set at enrollment time from the lead's qualification/score — a
+    // well-qualified lead's steps fire sooner than the sequence's authored
+    // day_offset, never later.
+    expect(dueCall![0]).toContain("ss.day_offset * se.cadence_multiplier * interval '1 day'");
   });
 
   it("creates a crm_tasks row for a due call_task step (when eligible) and advances the enrollment", async () => {
     checkSendEligibilityMock.mockResolvedValueOnce({ eligible: true, blockReasons: [] });
     queueResponses([
       { rowCount: 0, rows: [] }, // UPDATE ... completed
+      { rowCount: 0, rows: [] }, // UPDATE ... stop-for-reply
       {
         rowCount: 1,
         rows: [
@@ -274,6 +336,7 @@ describe("advanceDueEnrollments", () => {
     checkSendEligibilityMock.mockResolvedValueOnce({ eligible: false, blockReasons: ["suppressed:unsubscribed"] });
     queueResponses([
       { rowCount: 0, rows: [] }, // UPDATE ... completed
+      { rowCount: 0, rows: [] }, // UPDATE ... stop-for-reply
       {
         rowCount: 1,
         rows: [
@@ -300,14 +363,16 @@ describe("advanceDueEnrollments", () => {
 
     // No crm_tasks / message_draft_variants / enrollment UPDATE query issued
     // after the ineligible result — the whole batch is never failed, just
-    // this one step is left un-advanced.
-    expect(queryMock.mock.calls.length).toBe(2);
+    // this one step is left un-advanced. (3 calls: completed-pass UPDATE,
+    // stop-for-reply UPDATE, due-steps SELECT.)
+    expect(queryMock.mock.calls.length).toBe(3);
   });
 
   it("advances an eligible email step once a matching message_draft_variants row exists", async () => {
     checkSendEligibilityMock.mockResolvedValueOnce({ eligible: true, blockReasons: [] });
     queueResponses([
       { rowCount: 0, rows: [] }, // UPDATE ... completed
+      { rowCount: 0, rows: [] }, // UPDATE ... stop-for-reply
       {
         rowCount: 1,
         rows: [
@@ -338,6 +403,7 @@ describe("advanceDueEnrollments", () => {
     checkSendEligibilityMock.mockResolvedValueOnce({ eligible: true, blockReasons: [] });
     queueResponses([
       { rowCount: 0, rows: [] }, // UPDATE ... completed
+      { rowCount: 0, rows: [] }, // UPDATE ... stop-for-reply
       {
         rowCount: 1,
         rows: [
@@ -366,6 +432,7 @@ describe("advanceDueEnrollments", () => {
   it("advances a due final_note step directly, with no eligibility check and no task/draft lookup", async () => {
     queueResponses([
       { rowCount: 0, rows: [] }, // UPDATE ... completed
+      { rowCount: 0, rows: [] }, // UPDATE ... stop-for-reply
       {
         rowCount: 1,
         rows: [
@@ -389,5 +456,311 @@ describe("advanceDueEnrollments", () => {
 
     expect(result.advanced).toBe(1);
     expect(checkSendEligibilityMock).not.toHaveBeenCalled();
+  });
+
+  it("halts (stoppedForReply) active enrollments whose lead has replied since enrolling, before selecting due steps", async () => {
+    queueResponses([
+      { rowCount: 0, rows: [] }, // UPDATE ... completed
+      { rowCount: 2, rows: [] }, // UPDATE ... stop-for-reply: 2 enrollments halted
+      { rowCount: 0, rows: [] }, // SELECT due: none (the replied leads are no longer 'active')
+    ]);
+
+    const result = await advanceDueEnrollments(fakeTenantDb() as never, TENANT_A, PROJECT_1);
+
+    expect(result.stoppedForReply).toBe(2);
+    expect(result.advanced).toBe(0);
+
+    const stopForReplyCall = queryMock.mock.calls.find(
+      ([sql]) => typeof sql === "string" && sql.includes("stopped_replied") && sql.includes("lead_replies"),
+    );
+    expect(stopForReplyCall).toBeDefined();
+    expect(stopForReplyCall![1]).toEqual([TENANT_A, PROJECT_1]);
+  });
+
+  it("sends a real email via an injected, configured EmailProvider for a due, approved email step, and counts it in emailsSent", async () => {
+    checkSendEligibilityMock.mockResolvedValueOnce({ eligible: true, blockReasons: [] });
+    queueResponses([
+      { rowCount: 0, rows: [] }, // UPDATE ... completed
+      { rowCount: 0, rows: [] }, // UPDATE ... stop-for-reply
+      {
+        rowCount: 1,
+        rows: [
+          {
+            enrollment_id: ENROLLMENT_1,
+            sequence_id: SEQUENCE_1,
+            lead_id: LEAD_1,
+            current_step_order: 0,
+            step_order: 0,
+            step_type: "email",
+            message_draft_variant_channel: "email",
+            task_instructions: null,
+            lead_email: "lead@example.com",
+          },
+        ],
+      }, // SELECT due
+      {
+        rowCount: 1,
+        rows: [{ id: "variant-1", subject: "Hi there", body: "Let's talk", sender_identity: "rep@tenant.com" }],
+      }, // SELECT message_draft_variants (joined to an 'approved' message_drafts row)
+      { rowCount: 1, rows: [] }, // UPDATE current_step_order
+    ]);
+
+    const sendMock = vi.fn().mockResolvedValue({ provider: "smtp", messageId: "abc123", sentAt: "2026-01-01T00:00:00Z" });
+    const fakeProvider = { name: "smtp", send: sendMock };
+
+    const result = await advanceDueEnrollments(fakeTenantDb() as never, TENANT_A, PROJECT_1, {
+      emailProvider: fakeProvider,
+    });
+
+    expect(result.emailsSent).toBe(1);
+    expect(result.advanced).toBe(1);
+    expect(result.skipped).toEqual([]);
+    expect(sendMock).toHaveBeenCalledWith({
+      to: "lead@example.com",
+      subject: "Hi there",
+      body: "Let's talk",
+      from: "rep@tenant.com",
+    });
+
+    const variantCall = queryMock.mock.calls.find(
+      ([sql]) => typeof sql === "string" && sql.includes("FROM message_draft_variants"),
+    );
+    expect(variantCall).toBeDefined();
+    expect(variantCall![0]).toContain("md.status = 'approved'");
+  });
+
+  it("does not advance, and records why, when a real EmailProvider is configured but the send genuinely fails", async () => {
+    checkSendEligibilityMock.mockResolvedValueOnce({ eligible: true, blockReasons: [] });
+    queueResponses([
+      { rowCount: 0, rows: [] }, // UPDATE ... completed
+      { rowCount: 0, rows: [] }, // UPDATE ... stop-for-reply
+      {
+        rowCount: 1,
+        rows: [
+          {
+            enrollment_id: ENROLLMENT_1,
+            sequence_id: SEQUENCE_1,
+            lead_id: LEAD_1,
+            current_step_order: 0,
+            step_order: 0,
+            step_type: "email",
+            message_draft_variant_channel: "email",
+            task_instructions: null,
+            lead_email: "lead@example.com",
+          },
+        ],
+      }, // SELECT due
+      {
+        rowCount: 1,
+        rows: [{ id: "variant-1", subject: "Hi there", body: "Let's talk", sender_identity: "rep@tenant.com" }],
+      }, // SELECT message_draft_variants
+      // NOTE: no UPDATE current_step_order mocked — a real send failure must not advance the step.
+    ]);
+
+    const fakeProvider = { name: "smtp", send: vi.fn().mockRejectedValue(new Error("SMTP connection refused")) };
+
+    const result = await advanceDueEnrollments(fakeTenantDb() as never, TENANT_A, PROJECT_1, {
+      emailProvider: fakeProvider,
+    });
+
+    expect(result.emailsSent).toBe(0);
+    expect(result.advanced).toBe(0);
+    expect(result.skipped).toEqual([
+      { enrollmentId: ENROLLMENT_1, reason: "email_send_failed:SMTP connection refused" },
+    ]);
+  });
+
+  it("sends a real WhatsApp template message via an injected, configured WhatsAppProvider for a due, approved whatsapp step, and counts it in whatsappSent", async () => {
+    checkSendEligibilityMock.mockResolvedValueOnce({ eligible: true, blockReasons: [] });
+    queueResponses([
+      { rowCount: 0, rows: [] }, // UPDATE ... completed
+      { rowCount: 0, rows: [] }, // UPDATE ... stop-for-reply
+      {
+        rowCount: 1,
+        rows: [
+          {
+            enrollment_id: ENROLLMENT_1,
+            sequence_id: SEQUENCE_1,
+            lead_id: LEAD_1,
+            current_step_order: 0,
+            step_order: 0,
+            step_type: "whatsapp",
+            message_draft_variant_channel: "whatsapp",
+            task_instructions: "day0_outreach",
+            lead_email: "lead@example.com",
+            lead_phone: "+15551234567",
+          },
+        ],
+      }, // SELECT due
+      { rowCount: 1, rows: [{ id: "variant-1", body: "Hi {{name}}, let's talk growth." }] }, // SELECT message_draft_variants
+      { rowCount: 1, rows: [] }, // UPDATE current_step_order
+    ]);
+
+    const sendMock = vi
+      .fn()
+      .mockResolvedValue({ provider: "whatsapp_business", messageId: "wamid.abc123", sentAt: "2026-01-01T00:00:00Z" });
+    const fakeProvider = { name: "whatsapp_business", sendTemplateMessage: sendMock };
+
+    const result = await advanceDueEnrollments(fakeTenantDb() as never, TENANT_A, PROJECT_1, {
+      whatsAppProvider: fakeProvider,
+    });
+
+    expect(result.whatsappSent).toBe(1);
+    expect(result.advanced).toBe(1);
+    expect(result.skipped).toEqual([]);
+    expect(sendMock).toHaveBeenCalledWith({
+      to: "+15551234567",
+      templateName: "day0_outreach",
+      parameters: ["Hi {{name}}, let's talk growth."],
+    });
+
+    expect(checkSendEligibilityMock).toHaveBeenCalledWith(
+      expect.anything(),
+      TENANT_A,
+      expect.objectContaining({ leadId: LEAD_1, phone: "+15551234567", channel: "whatsapp" }),
+    );
+  });
+
+  it("does not advance a whatsapp step, and records why, when the lead has no linked contact phone number", async () => {
+    checkSendEligibilityMock.mockResolvedValueOnce({ eligible: true, blockReasons: [] });
+    queueResponses([
+      { rowCount: 0, rows: [] }, // UPDATE ... completed
+      { rowCount: 0, rows: [] }, // UPDATE ... stop-for-reply
+      {
+        rowCount: 1,
+        rows: [
+          {
+            enrollment_id: ENROLLMENT_1,
+            sequence_id: SEQUENCE_1,
+            lead_id: LEAD_1,
+            current_step_order: 0,
+            step_order: 0,
+            step_type: "whatsapp",
+            message_draft_variant_channel: "whatsapp",
+            task_instructions: "day0_outreach",
+            lead_email: "lead@example.com",
+            lead_phone: null,
+          },
+        ],
+      }, // SELECT due
+    ]);
+
+    const result = await advanceDueEnrollments(fakeTenantDb() as never, TENANT_A, PROJECT_1);
+
+    expect(result.advanced).toBe(0);
+    expect(result.skipped).toEqual([{ enrollmentId: ENROLLMENT_1, reason: "lead_has_no_phone" }]);
+  });
+
+  it("does not advance a whatsapp step, and records why, when no WhatsApp template name (task_instructions) is configured on the step", async () => {
+    checkSendEligibilityMock.mockResolvedValueOnce({ eligible: true, blockReasons: [] });
+    queueResponses([
+      { rowCount: 0, rows: [] }, // UPDATE ... completed
+      { rowCount: 0, rows: [] }, // UPDATE ... stop-for-reply
+      {
+        rowCount: 1,
+        rows: [
+          {
+            enrollment_id: ENROLLMENT_1,
+            sequence_id: SEQUENCE_1,
+            lead_id: LEAD_1,
+            current_step_order: 0,
+            step_order: 0,
+            step_type: "whatsapp",
+            message_draft_variant_channel: "whatsapp",
+            task_instructions: null,
+            lead_email: "lead@example.com",
+            lead_phone: "+15551234567",
+          },
+        ],
+      }, // SELECT due
+    ]);
+
+    const result = await advanceDueEnrollments(fakeTenantDb() as never, TENANT_A, PROJECT_1);
+
+    expect(result.advanced).toBe(0);
+    expect(result.skipped).toEqual([{ enrollmentId: ENROLLMENT_1, reason: "whatsapp_step_missing_template_name" }]);
+  });
+
+  it("advances the step without sending (no fabricated result) when no WhatsAppProvider is configured", async () => {
+    checkSendEligibilityMock.mockResolvedValueOnce({ eligible: true, blockReasons: [] });
+    queueResponses([
+      { rowCount: 0, rows: [] }, // UPDATE ... completed
+      { rowCount: 0, rows: [] }, // UPDATE ... stop-for-reply
+      {
+        rowCount: 1,
+        rows: [
+          {
+            enrollment_id: ENROLLMENT_1,
+            sequence_id: SEQUENCE_1,
+            lead_id: LEAD_1,
+            current_step_order: 0,
+            step_order: 0,
+            step_type: "whatsapp",
+            message_draft_variant_channel: "whatsapp",
+            task_instructions: "day0_outreach",
+            lead_email: "lead@example.com",
+            lead_phone: "+15551234567",
+          },
+        ],
+      }, // SELECT due
+      { rowCount: 1, rows: [{ id: "variant-1", body: "Hi there" }] }, // SELECT message_draft_variants
+      { rowCount: 1, rows: [] }, // UPDATE current_step_order
+    ]);
+
+    const { NotConfiguredError: RealNotConfiguredError } = await import("../src/lib/channelProviders.js");
+    const fakeProvider = {
+      name: "whatsapp_business (not configured)",
+      sendTemplateMessage: vi.fn().mockRejectedValue(new RealNotConfiguredError("not configured")),
+    };
+
+    const result = await advanceDueEnrollments(fakeTenantDb() as never, TENANT_A, PROJECT_1, {
+      whatsAppProvider: fakeProvider,
+    });
+
+    expect(result.whatsappSent).toBe(0);
+    expect(result.advanced).toBe(1);
+    expect(result.skipped).toEqual([]);
+  });
+
+  it("does not advance a whatsapp step, and records why, when a real WhatsAppProvider is configured but the send genuinely fails", async () => {
+    checkSendEligibilityMock.mockResolvedValueOnce({ eligible: true, blockReasons: [] });
+    queueResponses([
+      { rowCount: 0, rows: [] }, // UPDATE ... completed
+      { rowCount: 0, rows: [] }, // UPDATE ... stop-for-reply
+      {
+        rowCount: 1,
+        rows: [
+          {
+            enrollment_id: ENROLLMENT_1,
+            sequence_id: SEQUENCE_1,
+            lead_id: LEAD_1,
+            current_step_order: 0,
+            step_order: 0,
+            step_type: "whatsapp",
+            message_draft_variant_channel: "whatsapp",
+            task_instructions: "day0_outreach",
+            lead_email: "lead@example.com",
+            lead_phone: "+15551234567",
+          },
+        ],
+      }, // SELECT due
+      { rowCount: 1, rows: [{ id: "variant-1", body: "Hi there" }] }, // SELECT message_draft_variants
+      // NOTE: no UPDATE current_step_order mocked — a real send failure must not advance the step.
+    ]);
+
+    const fakeProvider = {
+      name: "whatsapp_business",
+      sendTemplateMessage: vi.fn().mockRejectedValue(new Error("WhatsApp Cloud API returned HTTP 401")),
+    };
+
+    const result = await advanceDueEnrollments(fakeTenantDb() as never, TENANT_A, PROJECT_1, {
+      whatsAppProvider: fakeProvider,
+    });
+
+    expect(result.whatsappSent).toBe(0);
+    expect(result.advanced).toBe(0);
+    expect(result.skipped).toEqual([
+      { enrollmentId: ENROLLMENT_1, reason: "whatsapp_send_failed:WhatsApp Cloud API returned HTTP 401" },
+    ]);
   });
 });

@@ -371,7 +371,14 @@ describe("POST .../marketing-intelligence/ask", () => {
       .send({ question: "how many leads do we have" });
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ matchedIntent: "lead_count", answer: "There are 9 lead(s) in total." });
+    expect(res.body).toEqual({
+      matchedIntent: "lead_count",
+      answer: "There are 9 lead(s) in total.",
+      // Milestone 5 (P4): no LLM is configured in this test environment, so
+      // the optional LLM-explanation enhancement honestly degrades to null
+      // and the deterministic matchedIntent/answer above are unchanged.
+      llmExplanation: null,
+    });
 
     const insertCall = queryMock.mock.calls.find(([sql]: [string]) => sql.includes("INSERT INTO marketing_qa_log"));
     expect(insertCall![1]).toEqual([TENANT_A, PROJECT_1, USER_1, "how many leads do we have", "lead_count", "There are 9 lead(s) in total."]);

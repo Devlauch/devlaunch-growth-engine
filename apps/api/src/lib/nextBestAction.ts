@@ -15,6 +15,14 @@
 
 import { shouldPauseForHealth } from "./warmupPlan.js";
 import { runOptional, firstCount } from "./pgOptional.js";
+import {
+  computeEngagementScore,
+  detectIntentSignals,
+  getLifecycleStage,
+  getUnifiedTimeline,
+  type LifecycleDealInput,
+  type LifecycleLeadInput,
+} from "./unifiedCustomerProfile.js";
 
 // Roadmap item 8 ("priority queue"): a lead scored above this is
 // considered high-priority. Mirrors QUALIFIED_SCORE_THRESHOLD-style
@@ -137,4 +145,123 @@ export async function recommendNextActions(
   }
 
   return actions;
+}
+
+// ---------------------------------------------------------------------------
+// Workstream F ("Unified customer profile"): a PER-LEAD next-best-action,
+// extending (not duplicating) recommendNextActions above. recommendNextActions
+// is project-level ("what should this tenant look at across all its leads
+// today") and stays completely unmodified; getNextBestActionForLead is a new,
+// separate entry point for "what should a rep do about THIS one lead right
+// now," built on top of unifiedCustomerProfile.ts's new
+// timeline/engagement-score/intent-signal/lifecycle-stage aggregation. Same
+// deterministic-rules-over-real-data convention as every rule above — no LLM
+// call anywhere in this function.
+// ---------------------------------------------------------------------------
+
+export interface NextBestAction {
+  action: string;
+  reason: string;
+}
+
+// Reuses unifiedCustomerProfile.ts's computeEngagementScore 0-100 scale
+// (see that file for the exact formula) — these are just the two
+// thresholds this rule set checks against, named rather than inlined.
+const HIGH_ENGAGEMENT_SCORE_THRESHOLD = 60;
+const LOW_ENGAGEMENT_SCORE_THRESHOLD = 20;
+
+/**
+ * Deterministic, rules-based next-best-action for a single lead. Loads the
+ * lead's own status + its deals' stages (the same real columns
+ * getLifecycleStage expects — see unifiedCustomerProfile.ts), builds this
+ * lead's unified timeline, then evaluates one ordered set of rules against
+ * lifecycleStage + engagementScore + intentSignals. The first matching rule
+ * wins; there is always a fallback at the end, so this never returns
+ * nothing.
+ */
+export async function getNextBestActionForLead(
+  tenantDb: import("pg").PoolClient,
+  tenantId: string,
+  projectId: string,
+  leadId: string,
+): Promise<NextBestAction> {
+  const leadResult = await tenantDb.query<{ status: string }>(
+    `SELECT status FROM leads WHERE id = $1 AND tenant_id = $2 AND project_id = $3`,
+    [leadId, tenantId, projectId],
+  );
+  if (leadResult.rowCount === 0) {
+    return { action: "No action", reason: "Lead not found in this tenant/project." };
+  }
+  const lead: LifecycleLeadInput = leadResult.rows[0];
+
+  const dealsResult = await tenantDb.query<{ stage: string }>(
+    `SELECT stage FROM deals WHERE tenant_id = $1 AND project_id = $2 AND lead_id = $3`,
+    [tenantId, projectId, leadId],
+  );
+  const deals: LifecycleDealInput[] = dealsResult.rows;
+
+  const timeline = await getUnifiedTimeline(tenantDb, tenantId, projectId, leadId);
+  const { score } = computeEngagementScore(timeline);
+  const intentSignals = detectIntentSignals(timeline);
+  const stage = getLifecycleStage(lead, deals);
+
+  if (stage === "customer") {
+    return {
+      action: "Monitor for renewal/expansion opportunity",
+      reason: `Lifecycle stage is "customer" (has a won deal); engagement score ${score}.`,
+    };
+  }
+
+  if (stage === "opportunity") {
+    const reviewingPricing = intentSignals.some((signal) => signal.toLowerCase().includes("pricing"));
+    if (reviewingPricing) {
+      return {
+        action: "Reach out proactively — lead is actively reviewing pricing",
+        reason: `Lifecycle stage is "opportunity" and intent signals include: ${intentSignals.join("; ")}.`,
+      };
+    }
+    return {
+      action: "Follow up on the open deal",
+      reason: `Lifecycle stage is "opportunity" with engagement score ${score}; no high-intent signal detected yet.`,
+    };
+  }
+
+  if (stage === "sql") {
+    const meetingScheduled = intentSignals.some((signal) => signal.toLowerCase().includes("upcoming meeting"));
+    if (meetingScheduled) {
+      return {
+        action: "Prepare for the scheduled meeting",
+        reason: `Lifecycle stage is "sql" and a meeting is already scheduled: ${intentSignals.join("; ")}.`,
+      };
+    }
+    return {
+      action: "Schedule a discovery call",
+      reason: `Lifecycle stage is "sql" (approved for outreach) with engagement score ${score} but no meeting scheduled yet.`,
+    };
+  }
+
+  if (stage === "mql") {
+    if (score >= HIGH_ENGAGEMENT_SCORE_THRESHOLD) {
+      return {
+        action: "Promote to sales outreach (approve for outreach)",
+        reason: `Lifecycle stage is "mql" with a high engagement score (${score} >= ${HIGH_ENGAGEMENT_SCORE_THRESHOLD}).`,
+      };
+    }
+    return {
+      action: "Continue the nurture sequence",
+      reason: `Lifecycle stage is "mql" with engagement score ${score}, below the ${HIGH_ENGAGEMENT_SCORE_THRESHOLD}-point outreach threshold.`,
+    };
+  }
+
+  // stage === "lead" or "visitor"
+  if (score <= LOW_ENGAGEMENT_SCORE_THRESHOLD && intentSignals.length === 0) {
+    return {
+      action: "Add to a low-touch nurture sequence",
+      reason: `Lifecycle stage is "${stage}" with low engagement (score ${score}) and no intent signals detected.`,
+    };
+  }
+  return {
+    action: "Qualify this lead",
+    reason: `Lifecycle stage is "${stage}" with engagement score ${score} and ${intentSignals.length} intent signal(s) — review and qualify.`,
+  };
 }

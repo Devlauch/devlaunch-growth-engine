@@ -8,10 +8,11 @@ import { runSiteAudit } from "../lib/siteAudit.js";
 import { checkCoreWebVitals } from "../lib/coreWebVitals.js";
 import {
   NotConfiguredError,
-  NotConfiguredRankingProvider,
   generateSeoRecommendations,
   type RankingProvider,
 } from "../lib/keywordRankingStub.js";
+import { getRankingProvider } from "../lib/serpProvider.js";
+import { recordUsageEvent } from "../lib/usageEvents.js";
 
 /**
  * Technical SEO Agent (Phase 2 item 3). Mounted at
@@ -21,11 +22,13 @@ import {
  *   robots.txt, broken links, metadata — see ../lib/siteAudit.ts) plus an
  *   optional real Core Web Vitals check via Google PageSpeed Insights (see
  *   ../lib/coreWebVitals.ts) when GOOGLE_PAGESPEED_API_KEY is configured.
- * - POST/GET /keyword-rankings: an honest pluggable stub (see
- *   ../lib/keywordRankingStub.ts) — SERP position tracking requires a paid
- *   provider this environment has no credentials for, so this always
- *   records the request with position: null, source: 'not_configured'
- *   rather than ever fabricating a number.
+ * - POST/GET /keyword-rankings: uses getRankingProvider() (../lib/
+ *   serpProvider.ts), which resolves a real SerpApi-backed RankingProvider
+ *   when SERPAPI_API_KEY is configured, or ../lib/keywordRankingStub.ts's
+ *   honest NotConfiguredRankingProvider otherwise — SERP position tracking
+ *   requires a paid provider, and no SerpApi key is configured in this
+ *   environment, so this always records the request with position: null,
+ *   source: 'not_configured' rather than ever fabricating a number.
  */
 export const seoRouter = Router({ mergeParams: true });
 seoRouter.use(requireAuth, requireTenantMembership);
@@ -186,9 +189,12 @@ seoRouter.get("/audits/:id", async (req, res, next) => {
 /**
  * POST /seo/keyword-rankings
  *
- * Always uses NotConfiguredRankingProvider, which always throws
- * NotConfiguredError — caught here and turned into an honest 202 record
- * rather than a 500 or a fabricated position.
+ * Uses getRankingProvider() (../lib/serpProvider.ts): a real
+ * SerpApiRankingProvider when SERPAPI_API_KEY is configured, or the honest
+ * NotConfiguredRankingProvider (always throws NotConfiguredError)
+ * otherwise — either way, caught here and turned into an honest 202 record
+ * (position: null, source: 'not_configured' when not configured) rather
+ * than a 500 or a fabricated position.
  */
 seoRouter.post("/keyword-rankings", async (req, res, next) => {
   try {
@@ -196,16 +202,34 @@ seoRouter.post("/keyword-rankings", async (req, res, next) => {
     await assertProjectInTenant(req, projectId);
     const body = createRankingSchema.parse(req.body);
 
-    const provider: RankingProvider = new NotConfiguredRankingProvider();
+    const provider: RankingProvider = getRankingProvider();
     let position: number | null = null;
     let source = "not_configured";
     try {
       const result = await provider.checkRanking(body.keyword, projectId);
       position = result.position;
       source = result.source;
+      if (source === "serpapi") {
+        await recordUsageEvent({
+          client: req.tenantDb!,
+          tenantId: req.tenantId!,
+          projectId,
+          eventType: "serp_api_request",
+          metadata: { keyword: body.keyword },
+        });
+      }
     } catch (err) {
-      if (!(err instanceof NotConfiguredError)) throw err;
-      // Expected: no real SERP provider is configured in this
+      if (!(err instanceof NotConfiguredError)) {
+        await recordUsageEvent({
+          client: req.tenantDb!,
+          tenantId: req.tenantId!,
+          projectId,
+          eventType: "serp_request_failed",
+          metadata: { keyword: body.keyword, error: err instanceof Error ? err.message : String(err) },
+        });
+        throw err;
+      }
+      // Expected when SERPAPI_API_KEY is not configured in this
       // environment. Record the request honestly rather than failing.
     }
 

@@ -150,6 +150,22 @@
       }
     }
 
+    // Milestone 2: if packages/embed-widget/analytics.js also happens to be
+    // on this page (NEVER required -- this form works standalone exactly
+    // as before if it isn't), pick up its visitor/session ids so this lead
+    // can be correlated back to a tracked visitor session server-side (see
+    // apps/api/src/lib/visitorLeadCorrelation.ts). A classic
+    // "graceful if-present" integration: no hard dependency either way.
+    try {
+      if (window.devlaunchAnalytics && typeof window.devlaunchAnalytics.getVisitorId === "function") {
+        payload.visitorId = window.devlaunchAnalytics.getVisitorId();
+        payload.sessionId = window.devlaunchAnalytics.getSessionId();
+      }
+    } catch (e) {
+      // ignore -- analytics snippet absent/misbehaving must never block a
+      // lead submission.
+    }
+
     return payload;
   }
 

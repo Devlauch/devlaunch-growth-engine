@@ -167,4 +167,216 @@ export const env = {
   // but has never been exercised against the real API (see
   // docs/PHASE_2_HUNTER_VALIDATION.md).
   hunterApiKey: process.env.HUNTER_API_KEY ?? null,
+
+  // Milestone 2 (P1): public, unauthenticated-by-design site-analytics
+  // ingestion endpoint (routes/publicAnalytics.ts) -- same per-IP/per-key
+  // fixed-window rate-limit convention as publicLeadsRateLimitPer*PerMin
+  // above, kept as its own env var since a pageview/event beacon fires far
+  // more often per visitor than a lead-capture form submit (once per page
+  // navigation, not once per form fill), so the default allowance is
+  // intentionally much higher.
+  publicAnalyticsRateLimitPerIpPerMin: Number(process.env.PUBLIC_ANALYTICS_RATE_LIMIT_PER_IP_PER_MIN ?? 120),
+  publicAnalyticsRateLimitPerKeyPerMin: Number(process.env.PUBLIC_ANALYTICS_RATE_LIMIT_PER_KEY_PER_MIN ?? 1200),
+
+  // Milestone 5 (P4): pluggable LLM intelligence (see
+  // apps/api/src/lib/llmProvider.ts). Optional — null in every environment
+  // this codebase has actually been run in: NO real Anthropic/OpenAI/any
+  // LLM API key is available here (confirmed by
+  // docs/BROADER_WORKSTREAM_AUDIT.md). When null, getLlmProvider() returns
+  // NotConfiguredLlmProvider and every LLM-enhanced code path
+  // (growthAdvisor.ts, chatbotEngine.ts, marketingQa.ts, aiSalesAssistant.ts)
+  // honestly falls back to its existing deterministic behavior — same
+  // injectable/graceful-degradation convention as googlePageSpeedApiKey/
+  // calendlyApiKey/hunterApiKey above. Model id is separately overridable
+  // (defaults to a real, documented Messages API model id) so this can be
+  // repointed without a code change once a key does exist.
+  anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? null,
+  anthropicModel: process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-5-20250929",
+
+  // Milestone 5: per-tenant monthly LLM token budget (input + output tokens
+  // combined), enforced by apps/api/src/lib/llmBudget.ts. `null`/unset means
+  // unlimited (no LLM-specific budget check — the quota.ts plan-limit
+  // system is unaffected and unrelated). This is deliberately a single
+  // platform-wide default rather than a per-plan table in planLimits.ts:
+  // there is no product requirement yet for per-plan LLM budgets, and
+  // adding one with no real usage data to size it against would be
+  // inventing a number — see llmBudget.ts's own doc comment.
+  llmMonthlyTokenBudgetPerTenant: process.env.LLM_MONTHLY_TOKEN_BUDGET_PER_TENANT
+    ? Number(process.env.LLM_MONTHLY_TOKEN_BUDGET_PER_TENANT)
+    : null,
+
+  // Milestone 6 (P5): SERP keyword-rank tracking — see
+  // apps/api/src/lib/serpProvider.ts. Optional, same convention as
+  // hunterApiKey above: null in this environment (no real SerpApi key is
+  // available here), in which case getRankingProvider() returns the
+  // honest NotConfiguredRankingProvider stub.
+  serpApiKey: process.env.SERPAPI_API_KEY ?? null,
+
+  // Milestone 6 (P5): Clearbit, the B2B decision-maker data provider
+  // chosen for this round (see apps/api/src/lib/clearbitProvider.ts). A
+  // tenant's own encrypted credential (POST /integrations/clearbit/connect)
+  // always takes priority; this is only a dev-mode/single-tenant fallback,
+  // same convention as hunterApiKey above. Null in this environment — no
+  // real Clearbit API key is available here.
+  clearbitApiKey: process.env.CLEARBIT_API_KEY ?? null,
+
+  // Phase 2 provider validation: Apollo.io, a third B2B decision-maker data
+  // provider (see apps/api/src/lib/apolloProvider.ts — People Enrichment
+  // ("match") endpoint). A tenant's own encrypted credential
+  // (POST /integrations/apollo/connect) always takes priority; this is only
+  // a dev-mode/single-tenant fallback, same convention as hunterApiKey/
+  // clearbitApiKey above. Null in every environment this codebase has
+  // actually been run in — no real Apollo API key is available here, so
+  // ApolloProvider's "valid credential" path is real, working client code,
+  // built and reviewed against Apollo's own published API docs, but never
+  // exercised against the live API (see apps/api/test/apolloRealApi.skip.test.ts
+  // and its BLOCKED note).
+  apolloApiKey: process.env.APOLLO_API_KEY ?? null,
+
+  // Milestone 6 (P5): Google Ads — see
+  // apps/api/src/lib/googleAdsProvider.ts. GOOGLE_ADS_CLIENT_ID/
+  // _CLIENT_SECRET/_DEVELOPER_TOKEN are platform-level (the one registered
+  // Google Ads OAuth app + developer token this deployment uses for every
+  // tenant's connection); a tenant's own refresh_token/customerId are
+  // stored per-tenant via POST /integrations/google_ads/connect
+  // (integrationCredentials.ts). _REFRESH_TOKEN/_CUSTOMER_ID here are only
+  // a dev-mode/single-tenant fallback. All null in this environment — no
+  // real Google Ads OAuth app or developer token is available here, so
+  // this path is real, working client code (see googleAdsProvider.ts) that
+  // has never been exercised against the live API.
+  googleAdsClientId: process.env.GOOGLE_ADS_CLIENT_ID ?? null,
+  googleAdsClientSecret: process.env.GOOGLE_ADS_CLIENT_SECRET ?? null,
+  googleAdsDeveloperToken: process.env.GOOGLE_ADS_DEVELOPER_TOKEN ?? null,
+  googleAdsRefreshToken: process.env.GOOGLE_ADS_REFRESH_TOKEN ?? null,
+  googleAdsCustomerId: process.env.GOOGLE_ADS_CUSTOMER_ID ?? null,
+
+  // Milestone 6 (P5): Meta Ads — see apps/api/src/lib/metaAdsProvider.ts.
+  // META_ADS_APP_ID/_APP_SECRET are platform-level (the one registered
+  // Meta app this deployment uses for every tenant's OAuth connection); a
+  // tenant's own long-lived access token is stored per-tenant via
+  // POST /integrations/meta_ads/connect. _ACCESS_TOKEN here is only a
+  // dev-mode/single-tenant fallback. All null in this environment.
+  metaAdsAppId: process.env.META_ADS_APP_ID ?? null,
+  metaAdsAppSecret: process.env.META_ADS_APP_SECRET ?? null,
+  metaAdsAccessToken: process.env.META_ADS_ACCESS_TOKEN ?? null,
+
+  // Milestone 6 (P5): WhatsApp Business Cloud API — see
+  // apps/api/src/lib/whatsAppProvider.ts. A tenant's own phone-number id +
+  // access token are stored per-tenant via
+  // POST /integrations/whatsapp_business/connect; the _PHONE_NUMBER_ID/
+  // _ACCESS_TOKEN vars here are only a dev-mode/single-tenant fallback.
+  // _APP_SECRET and _WEBHOOK_VERIFY_TOKEN are platform-level (this
+  // deployment's one registered Meta app secret, used to HMAC-verify every
+  // inbound delivery-status webhook, and the dashboard-configured verify
+  // token for the subscription handshake) — all null in this environment,
+  // in which case webhook verification honestly rejects every inbound
+  // request rather than accepting one unauthenticated.
+  whatsappBusinessPhoneNumberId: process.env.WHATSAPP_BUSINESS_PHONE_NUMBER_ID ?? null,
+  whatsappBusinessAccessToken: process.env.WHATSAPP_BUSINESS_ACCESS_TOKEN ?? null,
+  whatsappBusinessAppSecret: process.env.WHATSAPP_BUSINESS_APP_SECRET ?? null,
+  whatsappBusinessWebhookVerifyToken: process.env.WHATSAPP_BUSINESS_WEBHOOK_VERIFY_TOKEN ?? null,
+
+  // Milestone 4 (P3): real SaaS billing — see
+  // apps/api/src/lib/billingProvider.ts. Billing credentials are
+  // PLATFORM-level, not per-tenant (unlike listmonk/chatwoot/postiz, a
+  // billing provider account belongs to DevLaunch itself, not to each
+  // tenant), so these are plain env vars rather than an
+  // integrationCredentials.ts-encrypted per-tenant row. All null in every
+  // environment this codebase has been run in: no real Razorpay or Stripe
+  // account exists here.
+  //
+  // Razorpay (India-first): key_id/key_secret are the standard API
+  // credential pair (HTTP Basic auth against api.razorpay.com). The
+  // webhook secret is a SEPARATE value set only when registering a
+  // webhook endpoint in the Razorpay dashboard — CONFIRMED (fetched live
+  // from Razorpay's own docs, razorpay.com/docs/webhooks/validate-test/,
+  // during this work): "X-Razorpay-Signature" = hex(HMAC-SHA256(raw
+  // request body, webhook secret)), no timestamp concatenation (unlike
+  // Stripe) and no documented replay-protection window — see
+  // billingProvider.ts's doc comment for the exact citations.
+  razorpayKeyId: process.env.RAZORPAY_KEY_ID ?? null,
+  razorpayKeySecret: process.env.RAZORPAY_KEY_SECRET ?? null,
+  razorpayWebhookSecret: process.env.RAZORPAY_WEBHOOK_SECRET ?? null,
+  // Razorpay Plan ids (created once, out-of-band, via the Razorpay
+  // dashboard or POST /v1/plans — this codebase does not create Plans
+  // itself) that this platform's "starter"/"growth"/"enterprise" PlanName
+  // values map to. "free" never has a checkout (nothing to pay for).
+  // Optional — checkout for a given plan reports not_configured when its
+  // id is missing, same convention as the keys above.
+  razorpayPlanIdStarter: process.env.RAZORPAY_PLAN_ID_STARTER ?? null,
+  razorpayPlanIdGrowth: process.env.RAZORPAY_PLAN_ID_GROWTH ?? null,
+  razorpayPlanIdEnterprise: process.env.RAZORPAY_PLAN_ID_ENTERPRISE ?? null,
+
+  // Stripe (international): secret key is the standard Bearer-auth'd API
+  // credential; the webhook secret (`whsec_...`) is a separate per-endpoint
+  // value issued when registering a webhook endpoint in the Stripe
+  // dashboard — CONFIRMED (fetched live from Stripe's own docs,
+  // docs.stripe.com/webhooks, during this work): header "Stripe-Signature"
+  // = "t=<ts>,v1=<hex hmac>,...", signed payload is literally
+  // "<ts>.<raw body>", HMAC-SHA256, 5-minute default tolerance, compare
+  // against every v1 value present (supports secret rotation) — see
+  // billingProvider.ts's doc comment for the exact citations.
+  stripeSecretKey: process.env.STRIPE_SECRET_KEY ?? null,
+  stripeWebhookSecret: process.env.STRIPE_WEBHOOK_SECRET ?? null,
+  // Stripe Price ids (created once, out-of-band, via the Stripe dashboard
+  // or API — this codebase does not create Products/Prices itself) that
+  // this platform's plan names map to. Same optional/not_configured
+  // convention as the Razorpay plan ids above.
+  stripePriceIdStarter: process.env.STRIPE_PRICE_ID_STARTER ?? null,
+  stripePriceIdGrowth: process.env.STRIPE_PRICE_ID_GROWTH ?? null,
+  stripePriceIdEnterprise: process.env.STRIPE_PRICE_ID_ENTERPRISE ?? null,
+
+  // Platform-wide default when BOTH Razorpay and Stripe happen to be
+  // configured and neither a request nor a tenant's own currency
+  // preference picks one — see getActiveBillingProvider() in
+  // billingProvider.ts for the full resolution order. Optional;
+  // "razorpay" | "stripe" | null (null = just pick whichever single
+  // provider is configured, or report not_configured if zero are).
+  billingProviderDefault: (process.env.BILLING_PROVIDER_DEFAULT ?? null) as "razorpay" | "stripe" | null,
+
+  // Base URL the dashboard is served from, used only to build Stripe
+  // Checkout's required success_url/cancel_url and Razorpay subscriptions'
+  // callback_url. Optional — falls back to localhost so a dev environment
+  // with neither provider configured never needs it set.
+  dashboardBaseUrl: process.env.DASHBOARD_BASE_URL ?? "http://localhost:3000",
+
+  // Milestone 3 — lead-magnet file uploads (closes the gap
+  // 265_create_lead_magnets.sql's own comment documents: file_url was a
+  // client-supplied-URL stub with no real upload/storage infra). Same
+  // "no object storage configured in this environment" situation as PDF
+  // reports (see reportFilesDir above) — local-disk storage behind a
+  // pluggable FileStorage interface (apps/api/src/lib/fileStorage.ts) is
+  // the real, working default; LocalDiskFileStorage writes here, on its
+  // own dedicated `lead_magnet_files` volume (docker-compose.yml), never
+  // mixed with the report_files volume.
+  leadMagnetFilesDir: process.env.LEAD_MAGNET_FILES_DIR ?? "./lead_magnet_files",
+
+  // Max accepted upload size in bytes. 25MB default — large enough for a
+  // typical whitepaper/checklist PDF, small enough to bound local-disk
+  // usage and request memory (uploads are buffered in memory by multer
+  // before validation/storage — see routes/leadMagnetUploads.ts).
+  leadMagnetMaxFileSizeBytes: Number(process.env.LEAD_MAGNET_MAX_FILE_SIZE_BYTES ?? 25 * 1024 * 1024),
+
+  // HMAC-SHA256 secret for time-limited signed lead-magnet download links
+  // (apps/api/src/lib/signedDownloadUrl.ts). Same "reuse a server-side-only
+  // secret already in env rather than add new configuration surface"
+  // convention as lib/suppression.ts's unsubscribe tokens — falls back to
+  // jwtAccessSecret when unset, same as that module does.
+  leadMagnetDownloadSecret: process.env.LEAD_MAGNET_DOWNLOAD_SECRET ?? null,
+
+  // Custom-domain DNS verification (apps/api/src/lib/customDomainVerification.ts).
+  // The TXT record a tenant must publish is `_devlaunch-verify.<domain>`;
+  // this prefix is configurable only so a self-hosted fork can rebrand it
+  // without a code change — every environment this codebase actually runs
+  // in uses the default.
+  customDomainVerificationTxtPrefix: process.env.CUSTOM_DOMAIN_VERIFICATION_TXT_PREFIX ?? "_devlaunch-verify",
+
+  // ACME (Let's Encrypt) certificate provisioning (apps/api/src/lib/acmeClient.ts).
+  // Defaults to the real, public Let's Encrypt production directory URL;
+  // overridable to Let's Encrypt's staging directory for testing, or any
+  // other RFC 8555-compliant ACME v2 server. No account key / real public
+  // DNS control exists in this environment — see acmeClient.ts's doc
+  // comment for exactly what that blocks.
+  acmeDirectoryUrl: process.env.ACME_DIRECTORY_URL ?? "https://acme-v02.api.letsencrypt.org/directory",
+  acmeAccountContactEmail: process.env.ACME_ACCOUNT_CONTACT_EMAIL ?? null,
 };

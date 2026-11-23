@@ -1,0 +1,209 @@
+# docker-compose.postiz.yml — Postiz (social post scheduling/publishing),
+# run as a fully independent service per docs/OPEN_SOURCE_INTEGRATION_AUDIT.md's
+# postiz-app recommendation ("adopt as independent service ... never fork").
+#
+# ADDITIVE ONLY: this file is never merged into the shared docker-compose.yml
+# and shares none of its services/networks/volumes/Postgres. All 6 services
+# below are profile-gated (profiles: ["postiz"]) — same discipline as the
+# main docker-compose.yml's `crawl4ai` service and this project's other two
+# Milestone 2 overlays (docker-compose.listmonk.yml, docker-compose.chatwoot.yml)
+# — so neither a plain `docker compose up -d` nor adding this file with `-f`
+# alone starts anything; `--profile postiz` must be passed explicitly. Start
+# it alongside the main stack with:
+#   docker compose -f docker-compose.yml -f docker-compose.postiz.yml --profile postiz up -d
+# or fully standalone with:
+#   docker compose -f docker-compose.postiz.yml --profile postiz up -d
+#
+# HONEST OPERATIONAL COST (see docs/INTEGRATION_STATUS.md's Agent D section
+# for the full writeup; summarized here since this file is where it bites):
+# this is the heaviest of the 3 Milestone 2 integrations by a wide margin.
+# Running it for real means standing up and operating SIX containers that
+# have nothing to do with platform's own stack:
+#   1. postiz          — the app itself (NestJS API + Next.js frontend)
+#   2. postiz-postgres — Postiz's OWN Postgres (NOT shared with platform's;
+#                         no RLS, no tenant concept of its own — multi-
+#                         tenancy is platform-side only, via
+#                         postiz_organization_links, see migration 317)
+#   3. postiz-redis    — Postiz's OWN Redis (NOT shared with platform's)
+#   4. temporal        — a full Temporal server (Postiz's job-scheduling/
+#                         retry engine for post publishing — a SEPARATE
+#                         orchestration paradigm from platform's own
+#                         BullMQ-based worker; do not attempt to merge them)
+#   5. temporal-postgresql — Temporal's OWN Postgres (a THIRD Postgres
+#                         instance in this one override file)
+#   6. temporal-elasticsearch — Temporal's visibility store (the official
+#                         gitroomhq/postiz-app compose ships this; skipping
+#                         it leaves Temporal's workflow-search/visibility
+#                         UI non-functional, so it is kept here rather than
+#                         silently trimmed)
+# Plus the per-social-network OAuth app registration/review burden the
+# audit flags explicitly: each of Postiz's 37 provider integrations needs
+# its own developer-app credentials created on that network's own developer
+# portal (X_API_KEY/LINKEDIN_CLIENT_ID/etc. below) before a tenant can
+# connect that network through Postiz — this is a real, per-network,
+# sometimes week(s)-long process, independent of any code in this repo.
+#
+# This override intentionally does NOT attempt to run Postiz in a cheaper
+# "no Temporal" mode — the upstream project does not document one, and
+# patching that behavior out would cross into "modifying AGPLv3-covered
+# source", which license-compliance explicitly rules out (see
+# docs/LICENCE_COMPLIANCE.md's Postiz entry: unmodified image, API-only).
+name: devlaunch-postiz
+
+services:
+  postiz:
+    image: ghcr.io/gitroomhq/postiz-app:${POSTIZ_IMAGE_TAG:-latest}
+    container_name: devlaunch-postiz
+    profiles: ["postiz"]
+    restart: unless-stopped
+    environment:
+      MAIN_URL: ${POSTIZ_MAIN_URL:-http://localhost:5000}
+      FRONTEND_URL: ${POSTIZ_MAIN_URL:-http://localhost:5000}
+      NEXT_PUBLIC_BACKEND_URL: ${POSTIZ_BACKEND_URL:-http://localhost:5000/api}
+      JWT_SECRET: ${POSTIZ_JWT_SECRET:?Set POSTIZ_JWT_SECRET in .env.postiz — see .env.postiz.example}
+      DATABASE_URL: postgresql://${POSTIZ_DB_USER:-postiz}:${POSTIZ_DB_PASSWORD:-postiz}@postiz-postgres:5432/${POSTIZ_DB_NAME:-postiz}
+      REDIS_URL: redis://postiz-redis:6379
+      TEMPORAL_ADDRESS: temporal:7233
+      IS_GENERAL: "true"
+      DISABLE_REGISTRATION: ${POSTIZ_DISABLE_REGISTRATION:-false}
+      STORAGE_PROVIDER: local
+      UPLOAD_DIRECTORY: /uploads
+      NEXT_PUBLIC_UPLOAD_DIRECTORY: /uploads
+      API_LIMIT: ${POSTIZ_API_LIMIT:-30}
+      # Per-social-network OAuth app credentials — each left blank by
+      # default (that network simply won't be connectable until a real
+      # developer-app is registered on it; this is the per-network cost
+      # documented above, not a platform limitation).
+      X_API_KEY: ${POSTIZ_X_API_KEY:-}
+      X_API_SECRET: ${POSTIZ_X_API_SECRET:-}
+      LINKEDIN_CLIENT_ID: ${POSTIZ_LINKEDIN_CLIENT_ID:-}
+      LINKEDIN_CLIENT_SECRET: ${POSTIZ_LINKEDIN_CLIENT_SECRET:-}
+      FACEBOOK_APP_ID: ${POSTIZ_FACEBOOK_APP_ID:-}
+      FACEBOOK_APP_SECRET: ${POSTIZ_FACEBOOK_APP_SECRET:-}
+      # (additional per-network *_CLIENT_ID/*_CLIENT_SECRET vars follow the
+      # same pattern — see .env.postiz.example for the full documented list
+      # the upstream project supports; only the 3 above are wired here to
+      # keep this file readable, add more the same way as needed.)
+    volumes:
+      - devlaunch_postiz_config:/config/
+      - devlaunch_postiz_uploads:/uploads/
+    ports:
+      - "${POSTIZ_PORT:-5000}:5000"
+    networks:
+      - devlaunch-postiz-net
+      - devlaunch-temporal-net
+    depends_on:
+      postiz-postgres:
+        condition: service_healthy
+      postiz-redis:
+        condition: service_healthy
+
+  postiz-postgres:
+    image: postgres:17-alpine
+    container_name: devlaunch-postiz-postgres
+    profiles: ["postiz"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTIZ_DB_USER:-postiz}
+      POSTGRES_PASSWORD: ${POSTIZ_DB_PASSWORD:-postiz}
+      POSTGRES_DB: ${POSTIZ_DB_NAME:-postiz}
+    volumes:
+      - devlaunch_postiz_postgres_data:/var/lib/postgresql/data
+    networks:
+      - devlaunch-postiz-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTIZ_DB_USER:-postiz} -d ${POSTIZ_DB_NAME:-postiz}"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  postiz-redis:
+    image: redis:7.2-alpine
+    container_name: devlaunch-postiz-redis
+    profiles: ["postiz"]
+    restart: unless-stopped
+    volumes:
+      - devlaunch_postiz_redis_data:/data
+    networks:
+      - devlaunch-postiz-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # --- Temporal stack (Postiz's job-scheduling/retry engine) ---
+  temporal-elasticsearch:
+    image: elasticsearch:7.17.27
+    container_name: devlaunch-temporal-elasticsearch
+    profiles: ["postiz"]
+    restart: unless-stopped
+    environment:
+      - cluster.routing.allocation.disk.threshold_enabled=true
+      - cluster.routing.allocation.disk.watermark.low=512mb
+      - cluster.routing.allocation.disk.watermark.high=256mb
+      - cluster.routing.allocation.disk.watermark.flood_stage=128mb
+      - discovery.type=single-node
+      - ES_JAVA_OPTS=-Xms256m -Xmx256m
+      - xpack.security.enabled=false
+    networks:
+      - devlaunch-temporal-net
+    volumes:
+      - devlaunch_temporal_es_data:/usr/share/elasticsearch/data
+
+  temporal-postgresql:
+    image: postgres:16-alpine
+    container_name: devlaunch-temporal-postgres
+    profiles: ["postiz"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: ${POSTIZ_TEMPORAL_DB_PASSWORD:-temporal}
+    networks:
+      - devlaunch-temporal-net
+    volumes:
+      - devlaunch_temporal_postgres_data:/var/lib/postgresql/data
+
+  temporal:
+    image: temporalio/auto-setup:1.28.1
+    container_name: devlaunch-temporal
+    profiles: ["postiz"]
+    restart: unless-stopped
+    depends_on:
+      - temporal-postgresql
+      - temporal-elasticsearch
+    environment:
+      - DB=postgres12
+      - DB_PORT=5432
+      - POSTGRES_USER=temporal
+      - POSTGRES_PWD=${POSTIZ_TEMPORAL_DB_PASSWORD:-temporal}
+      - POSTGRES_SEEDS=temporal-postgresql
+      # Milestone 3 Phase 1 real-deployment fix: temporalio/auto-setup:1.28.1
+      # does not ship config/dynamicconfig/development-sql.yaml (confirmed
+      # via `docker run --entrypoint sh temporalio/auto-setup:1.28.1 -c "ls
+      # /etc/temporal/config/dynamicconfig/"` — only docker.yaml exists) —
+      # the original value crash-looped the container
+      # (ERROR Unable to create dynamic config client ... no such file or
+      # directory). docker.yaml (present, used as an empty override — valid,
+      # Temporal falls back to defaults) is the one that actually exists.
+      - DYNAMIC_CONFIG_FILE_PATH=config/dynamicconfig/docker.yaml
+      - ENABLE_ES=true
+      - ES_SEEDS=temporal-elasticsearch
+      - ES_VERSION=v7
+      - TEMPORAL_NAMESPACE=default
+    ports:
+      - "${POSTIZ_TEMPORAL_PORT:-7233}:7233"
+    networks:
+      - devlaunch-temporal-net
+
+volumes:
+  devlaunch_postiz_config:
+  devlaunch_postiz_uploads:
+  devlaunch_postiz_postgres_data:
+  devlaunch_postiz_redis_data:
+  devlaunch_temporal_postgres_data:
+  devlaunch_temporal_es_data:
+
+networks:
+  devlaunch-postiz-net:
+  devlaunch-temporal-net:

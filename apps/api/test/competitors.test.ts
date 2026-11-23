@@ -16,6 +16,21 @@ vi.mock("../src/db/pool.js", () => ({
   pool: { connect: connectMock },
 }));
 
+// SSRF guard (../src/lib/ssrfGuard.js) does real DNS resolution + a pinned
+// http/https connection by design (see docs/SECURITY_HARDENING_MILESTONE_1.md)
+// — neutralize it here so these route-level tests keep intercepting outbound
+// requests at the global-`fetch` layer, instead of hitting a real network.
+// Real DNS/rebinding/private-IP behavior is covered for real in
+// test/ssrfGuard.test.ts.
+vi.mock("../src/lib/ssrfGuard.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/lib/ssrfGuard.js")>();
+  return {
+    ...actual,
+    assertSafeUrl: vi.fn(async () => {}),
+    safeFetch: vi.fn((url: string, init?: unknown) => (globalThis.fetch as typeof fetch)(url, init as RequestInit)),
+  };
+});
+
 const { competitorsRouter } = await import("../src/routes/competitors.js");
 const { errorHandler } = await import("../src/middleware/errorHandler.js");
 const { extractKeywords } = await import("../src/lib/keywordExtraction.js");
@@ -456,5 +471,143 @@ describe("GET /competitors/:id/report", () => {
     expect(res.status).toBe(200);
     expect(res.body.positioningSummary).toMatch(/growth, pipeline, pricing/);
     expect(res.body.positioningSummary).toMatch(/2 change\(s\) detected in the last 30 days/);
+  });
+
+  it("extracts real pricing signals from the latest snapshot's crawled pages", async () => {
+    const app = buildApp();
+    queueResponses([
+      ...mockMembership(),
+      { rowCount: 1, rows: [] },
+      { rowCount: 1, rows: [{ id: COMPETITOR_1, domain: "acme.example.com" }] },
+      {
+        rowCount: 1,
+        rows: [
+          {
+            id: "snap-1",
+            extracted_keywords: [],
+            pages: [
+              {
+                url: "https://acme.example.com/pricing",
+                pageType: "pricing",
+                extractedText: "Our Pro plan starts at $49/month per user. We ship fast.",
+                contentHash: "h1",
+              },
+            ],
+          },
+        ],
+      },
+      { rowCount: 0, rows: [] },
+    ]);
+
+    const res = await request(app)
+      .get(`/api/v1/tenants/${TENANT_A}/projects/${PROJECT_1}/competitors/${COMPETITOR_1}/report`)
+      .set("X-Dev-User-Id", USER_1);
+
+    expect(res.status).toBe(200);
+    expect(res.body.pricingSignals).toHaveLength(1);
+    expect(res.body.pricingSignals[0].sentence).toContain("$49/month");
+    expect(res.body.positioningSummary).toMatch(/1 pricing\/plan sentence\(s\) found/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Business intelligence: auto-discovery + keyword opportunities (Phase 4b)
+// ---------------------------------------------------------------------------
+
+describe("POST /competitors/discover", () => {
+  it("reports an honest not-configured result when no growth analysis exists yet", async () => {
+    const app = buildApp();
+    queueResponses([
+      ...mockMembership(),
+      { rowCount: 1, rows: [] }, // assertProjectInTenant
+      { rowCount: 0, rows: [] }, // no growth_analyses row
+    ]);
+
+    const res = await request(app)
+      .post(`/api/v1/tenants/${TENANT_A}/projects/${PROJECT_1}/competitors/discover`)
+      .set("X-Dev-User-Id", USER_1);
+
+    expect(res.status).toBe(200);
+    expect(res.body.candidates).toEqual([]);
+    expect(res.body.message).toMatch(/no growth analysis has been run/i);
+  });
+
+  it("reports configured: false (never fabricated candidates) when SERPAPI_API_KEY is unset", async () => {
+    delete process.env.SERPAPI_API_KEY;
+    const app = buildApp();
+    queueResponses([
+      ...mockMembership(),
+      { rowCount: 1, rows: [] }, // assertProjectInTenant
+      {
+        rowCount: 1,
+        rows: [{ domain: "acme.example.com", products_services: ["invoicing"], extracted_keywords: [] }],
+      }, // latest growth_analyses
+      { rowCount: 0, rows: [] }, // existing competitor domains
+    ]);
+
+    const res = await request(app)
+      .post(`/api/v1/tenants/${TENANT_A}/projects/${PROJECT_1}/competitors/discover`)
+      .set("X-Dev-User-Id", USER_1);
+
+    expect(res.status).toBe(200);
+    expect(res.body.configured).toBe(false);
+    expect(res.body.candidates).toEqual([]);
+    expect(res.body.message).toMatch(/requires a configured search provider/i);
+  });
+});
+
+describe("GET /competitors/keyword-opportunities", () => {
+  it("returns real competitor keywords absent from the project's own extracted keywords", async () => {
+    const app = buildApp();
+    queueResponses([
+      ...mockMembership(),
+      { rowCount: 1, rows: [] }, // assertProjectInTenant
+      {
+        rowCount: 1,
+        rows: [{ extracted_keywords: [{ keyword: "invoicing", frequency: 10 }] }],
+      }, // latest growth_analyses
+      {
+        rowCount: 1,
+        rows: [
+          {
+            competitor_name: "Acme",
+            extracted_keywords: [
+              { keyword: "invoicing", frequency: 8 },
+              { keyword: "payroll", frequency: 6 },
+            ],
+          },
+        ],
+      }, // competitor keyword sets
+    ]);
+
+    const res = await request(app)
+      .get(`/api/v1/tenants/${TENANT_A}/projects/${PROJECT_1}/competitors/keyword-opportunities`)
+      .set("X-Dev-User-Id", USER_1);
+
+    expect(res.status).toBe(200);
+    expect(res.body.hasOwnSiteData).toBe(true);
+    expect(res.body.hasCompetitorData).toBe(true);
+    expect(res.body.opportunities).toEqual([
+      expect.objectContaining({ keyword: "payroll", competitorCount: 1, combinedFrequency: 6 }),
+    ]);
+  });
+
+  it("honestly reports no own-site data when no growth analysis has been run", async () => {
+    const app = buildApp();
+    queueResponses([
+      ...mockMembership(),
+      { rowCount: 1, rows: [] },
+      { rowCount: 0, rows: [] }, // no growth_analyses row
+      { rowCount: 0, rows: [] }, // no tracked competitors
+    ]);
+
+    const res = await request(app)
+      .get(`/api/v1/tenants/${TENANT_A}/projects/${PROJECT_1}/competitors/keyword-opportunities`)
+      .set("X-Dev-User-Id", USER_1);
+
+    expect(res.status).toBe(200);
+    expect(res.body.hasOwnSiteData).toBe(false);
+    expect(res.body.hasCompetitorData).toBe(false);
+    expect(res.body.opportunities).toEqual([]);
   });
 });

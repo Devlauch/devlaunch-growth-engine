@@ -4,6 +4,7 @@ import { requireAuth } from "../middleware/auth.js";
 import { requireTenantMembership } from "../middleware/tenant.js";
 import { Errors } from "../lib/httpError.js";
 import { advanceDueEnrollments } from "../lib/advanceSequences.js";
+import { evaluateQualification, computeCadenceMultiplier, type LeadScoreRow } from "../lib/leadPromotion.js";
 
 /**
  * sequencesRouter: mounted at
@@ -46,7 +47,7 @@ sequencesRouter.use(requireAuth, requireTenantMembership);
 export const sequenceEnrollmentsRouter = Router({ mergeParams: true });
 sequencesRouter.use("/:sequenceId/enrollments", sequenceEnrollmentsRouter);
 
-const STEP_TYPES = ["email", "call_task", "linkedin_task", "follow_up_email", "final_note"] as const;
+const STEP_TYPES = ["email", "call_task", "linkedin_task", "follow_up_email", "final_note", "whatsapp"] as const;
 const DRAFT_VARIANT_CHANNELS = ["email", "whatsapp", "call_script", "linkedin_note"] as const;
 const STOP_REASONS = ["replied", "unsubscribed", "bounced", "meeting_booked", "manual"] as const;
 
@@ -80,7 +81,7 @@ const stopSchema = z.object({
 
 const SEQUENCE_COLUMNS = `id, tenant_id, project_id, name, is_active, created_at, updated_at`;
 const STEP_COLUMNS = `id, tenant_id, sequence_id, step_order, day_offset, step_type, message_draft_variant_channel, task_instructions, created_at`;
-const ENROLLMENT_COLUMNS = `id, tenant_id, sequence_id, lead_id, status, current_step_order, enrolled_at, stopped_at, created_at, updated_at`;
+const ENROLLMENT_COLUMNS = `id, tenant_id, sequence_id, lead_id, status, current_step_order, cadence_multiplier, enrolled_at, stopped_at, created_at, updated_at`;
 
 const STOP_REASON_TO_STATUS: Record<(typeof STOP_REASONS)[number], string> = {
   replied: "stopped_replied",
@@ -294,7 +295,22 @@ sequenceEnrollmentsRouter.get("/", async (req, res, next) => {
   }
 });
 
-/** POST /api/v1/tenants/:tenantId/projects/:projectId/sequences/:sequenceId/enrollments — enroll a lead, active, at step 0 */
+/**
+ * POST /api/v1/tenants/:tenantId/projects/:projectId/sequences/:sequenceId/enrollments
+ *
+ * Enrolls a lead, active, at step 0. Also closes a real gap (Phase 6a):
+ * qualification scoring previously had no effect on sequence cadence at all.
+ * This reuses the SAME qualification concept leadPromotion.ts's
+ * evaluateQualification() already established for CRM promotion (a lead's
+ * current leads.status + lead_scores.total_score) to set this enrollment's
+ * cadence_multiplier via computeCadenceMultiplier() — a well-qualified or
+ * high-scoring lead gets every sequence_steps.day_offset fired sooner
+ * (advanceSequences.ts's due-check multiplies by this), a not-yet-qualified
+ * or not-yet-scored lead keeps the sequence's normal, authored cadence
+ * (multiplier 1). This is a one-time snapshot at enrollment time, not a
+ * live re-pacing as the score changes later (see the migration's header
+ * comment for why that's a deliberate, separate scope choice).
+ */
 sequenceEnrollmentsRouter.post("/", async (req, res, next) => {
   try {
     const projectId = z.string().uuid().parse((req.params as Record<string, string>).projectId);
@@ -303,7 +319,7 @@ sequenceEnrollmentsRouter.post("/", async (req, res, next) => {
     await loadSequenceOr404(req.tenantDb!, req.tenantId!, projectId, sequenceId);
 
     const lead = await req.tenantDb!.query(
-      "SELECT 1 FROM leads WHERE id = $1 AND tenant_id = $2 AND project_id = $3",
+      "SELECT status FROM leads WHERE id = $1 AND tenant_id = $2 AND project_id = $3",
       [body.leadId, req.tenantId, projectId],
     );
     if (lead.rowCount === 0) throw Errors.notFound("Lead not found in this project");
@@ -319,14 +335,21 @@ sequenceEnrollmentsRouter.post("/", async (req, res, next) => {
       throw Errors.conflict("This lead is already enrolled in this sequence");
     }
 
+    const scoreResult = await req.tenantDb!.query<LeadScoreRow>(
+      "SELECT total_score FROM lead_scores WHERE lead_id = $1 AND tenant_id = $2 AND project_id = $3",
+      [body.leadId, req.tenantId, projectId],
+    );
+    const qualification = evaluateQualification(lead.rows[0], scoreResult.rows[0] ?? null);
+    const cadence = computeCadenceMultiplier(qualification);
+
     const result = await req.tenantDb!.query(
-      `INSERT INTO sequence_enrollments (tenant_id, sequence_id, lead_id, status, current_step_order)
-       VALUES ($1, $2, $3, 'active', 0)
+      `INSERT INTO sequence_enrollments (tenant_id, sequence_id, lead_id, status, current_step_order, cadence_multiplier)
+       VALUES ($1, $2, $3, 'active', 0, $4)
        RETURNING ${ENROLLMENT_COLUMNS}`,
-      [req.tenantId, sequenceId, body.leadId],
+      [req.tenantId, sequenceId, body.leadId, cadence.multiplier],
     );
 
-    res.status(201).json({ enrollment: result.rows[0] });
+    res.status(201).json({ enrollment: result.rows[0], cadence });
   } catch (err) {
     next(err);
   }

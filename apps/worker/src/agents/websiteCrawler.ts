@@ -1,4 +1,5 @@
 import { parseRobotsTxt } from "./robotsTxt.js";
+import { assertSafeUrl, SsrfBlockedError } from "../lib/ssrfGuard.js";
 
 /**
  * Real website-crawling capability backing `Crawl4AIResearchAdapter`
@@ -70,7 +71,11 @@ export interface CrawlOrganizationSiteOptions {
   userAgent?: string;
   /** Swap in a fake backend for tests; defaults to a real HttpCrawl4AIBackend. */
   backend?: CrawlBackend;
-  /** Swap in a fake fetch for tests (used for the robots.txt request only). */
+  /** Swap in a fake fetch for tests (used for the robots.txt request only,
+   * and passed through to HttpCrawl4AIBackend's own baseUrl request when no
+   * custom `backend` is given). The robots.txt request additionally runs
+   * through `assertSafeUrl` (see below) regardless of this override, since
+   * it fetches the tenant-supplied `orgDomain` directly. */
   fetchImpl?: typeof fetch;
   /**
    * Bearer token for the crawl4ai service's own `/crawl` endpoint. Verified
@@ -85,6 +90,11 @@ export interface CrawlOrganizationSiteOptions {
 }
 
 const DEFAULT_USER_AGENT = "DevLaunchResearchBot/1.0 (+business-research; contact: platform-team)";
+
+/** Hardening: a single crawl4ai `/crawl` call (and the robots.txt preflight
+ * fetch below) has no other timeout in this call chain. */
+const CRAWL4AI_FETCH_TIMEOUT_MS = 20_000;
+const ROBOTS_FETCH_TIMEOUT_MS = 5_000;
 
 /**
  * Thrown when the Crawl4AI backend itself cannot be reached or errors out
@@ -149,7 +159,16 @@ export class HttpCrawl4AIBackend implements CrawlBackend {
     this.apiToken = apiToken ?? process.env.CRAWL4AI_API_TOKEN;
   }
 
+  /**
+   * SSRF guard: the actual `fetchImpl` call below targets `this.baseUrl`
+   * (the operator-configured Crawl4AI service), not `url` — but `url` is
+   * the real SSRF-relevant value, since Crawl4AI will itself fetch it on
+   * our behalf. `assertSafeUrl` (../lib/ssrfGuard.ts) validates it — DNS
+   * A/AAAA resolution + private/loopback/link-local/metadata-range
+   * rejection — before it's ever sent.
+   */
   async fetchPage(url: string): Promise<CrawlFetchResult> {
+    await assertSafeUrl(url);
     let response: Response;
     try {
       const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -158,6 +177,10 @@ export class HttpCrawl4AIBackend implements CrawlBackend {
         method: "POST",
         headers,
         body: JSON.stringify({ urls: [url] }),
+        // Hardening: no other timeout exists in this call chain — without
+        // this, a hung Crawl4AI service/target page ties up the request
+        // indefinitely.
+        signal: AbortSignal.timeout(CRAWL4AI_FETCH_TIMEOUT_MS),
       });
     } catch (err) {
       // Network-level failure (connection refused, DNS failure, etc.) —
@@ -348,7 +371,10 @@ export async function crawlOrganizationSite(
   let robotsText = "";
   try {
     const robotsUrl = new URL("/robots.txt", siteRoot).toString();
-    const robotsResp = await fetchImpl(robotsUrl);
+    // SSRF guard: this fetches the tenant-supplied orgDomain directly (no
+    // Crawl4AI process boundary in between) — validate before connecting.
+    await assertSafeUrl(robotsUrl);
+    const robotsResp = await fetchImpl(robotsUrl, { signal: AbortSignal.timeout(ROBOTS_FETCH_TIMEOUT_MS) });
     if (robotsResp.ok) {
       robotsText = await robotsResp.text();
     } else {
@@ -400,9 +426,11 @@ export async function crawlOrganizationSite(
         fetchedAt: new Date().toISOString(),
       });
     } catch (err) {
-      if (err instanceof CrawlServiceUnreachableError) {
-        // The crawl backend itself is down — abort rather than keep
-        // "trying" every remaining path and returning a hollow result.
+      if (err instanceof CrawlServiceUnreachableError || err instanceof SsrfBlockedError) {
+        // The crawl backend is down, or this URL was blocked by the SSRF
+        // guard — either way abort rather than keep "trying" every
+        // remaining path and returning a hollow, all-skipped result that
+        // looks like an honest empty crawl.
         throw err;
       }
       skipped.push({ url: pageUrl, reason: err instanceof Error ? err.message : String(err) });

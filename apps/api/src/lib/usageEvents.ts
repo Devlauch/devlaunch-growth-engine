@@ -8,7 +8,23 @@ export type UsageEventType =
   | "hunter_api_request"
   | "hunter_discovery"
   | "hunter_verification"
-  | "hunter_request_failed";
+  | "hunter_request_failed"
+  | "llm_tokens_input"
+  | "llm_tokens_output"
+  // Milestone 6 (P5, external growth channels) — see
+  // packages/db/migrations/540_extend_usage_events_growth_channel_types.sql
+  // for the full per-type description.
+  | "serp_api_request"
+  | "serp_request_failed"
+  | "clearbit_api_request"
+  | "clearbit_request_failed"
+  | "google_ads_api_request"
+  | "google_ads_request_failed"
+  | "meta_ads_api_request"
+  | "meta_ads_request_failed"
+  | "whatsapp_message_sent"
+  | "whatsapp_send_failed"
+  | "whatsapp_webhook_received";
 
 export interface RecordUsageEventParams {
   client: PoolClient;

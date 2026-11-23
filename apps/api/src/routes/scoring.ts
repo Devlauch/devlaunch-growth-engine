@@ -1,4 +1,5 @@
 import { Router, type Request } from "express";
+import type { PoolClient } from "pg";
 import { z } from "zod";
 import { requireAuth } from "../middleware/auth.js";
 import { requireTenantMembership } from "../middleware/tenant.js";
@@ -275,90 +276,125 @@ function buildRecomputeEvidenceMap(
 }
 
 /**
+ * The actual recompute algorithm, factored out of the POST /recompute route
+ * handler below so it can also be called directly, in-process, right after
+ * a lead's evidence changes elsewhere (company enrichment completing, or a
+ * reply getting classified) — see apps/api/src/lib/companyEnrichment.ts's
+ * call site (via routes/leadIntelligence.ts and workflow/stages/leadGeneration.ts)
+ * and routes/replies.ts. That is a deliberate judgment call over adding a
+ * periodic "recompute every lead" cron job: evidence for a given lead only
+ * ever changes at a handful of well-defined moments, so recomputing right
+ * then is both cheaper (no wasted full-table scans/recomputation of leads
+ * whose evidence hasn't moved) and fresher (the score updates immediately,
+ * not up to one tick later) than a blind periodic sweep would be.
+ *
+ * Returns null (not an error) when the project has no active rubric yet —
+ * every caller of this from a non-HTTP context (evidence-change call sites)
+ * treats "nothing to recompute against yet" as a normal, silent no-op
+ * rather than a failure.
+ */
+export async function recomputeLeadScore(
+  tenantDb: PoolClient,
+  tenantId: string,
+  projectId: string,
+  leadId: string,
+): Promise<Record<string, unknown> | null> {
+  const leadResult = await tenantDb.query(`SELECT * FROM leads WHERE id = $1 AND tenant_id = $2 AND project_id = $3`, [
+    leadId,
+    tenantId,
+    projectId,
+  ]);
+  if (leadResult.rowCount === 0) return null;
+  const lead = leadResult.rows[0];
+
+  const rubricResult = await tenantDb.query(
+    `SELECT * FROM scoring_rubrics WHERE tenant_id = $1 AND project_id = $2 AND is_active = true
+     ORDER BY updated_at DESC LIMIT 1`,
+    [tenantId, projectId],
+  );
+  if (rubricResult.rowCount === 0) return null;
+  const rubric = rubricResult.rows[0];
+  const criteria = (rubric.criteria ?? []) as ScoreLeadCriterion[];
+
+  const emailDomain = typeof lead.email === "string" ? normalizeDomain(lead.email.split("@")[1]) : null;
+  const companyName = typeof lead.company === "string" ? normalizeOrgName(lead.company) : null;
+
+  let matchedOrg: Record<string, unknown> | null = null;
+  if (emailDomain) {
+    const byDomain = await tenantDb.query(
+      `SELECT * FROM discovered_organizations WHERE tenant_id = $1 AND project_id = $2 AND normalized_domain = $3 LIMIT 1`,
+      [tenantId, projectId, emailDomain],
+    );
+    if (byDomain.rowCount && byDomain.rowCount > 0) matchedOrg = byDomain.rows[0];
+  }
+  if (!matchedOrg && companyName) {
+    const byName = await tenantDb.query(
+      `SELECT * FROM discovered_organizations WHERE tenant_id = $1 AND project_id = $2 AND normalized_name = $3 LIMIT 1`,
+      [tenantId, projectId, companyName],
+    );
+    if (byName.rowCount && byName.rowCount > 0) matchedOrg = byName.rows[0];
+  }
+
+  let contacts: Record<string, unknown>[] = [];
+  if (matchedOrg) {
+    const contactsResult = await tenantDb.query(
+      `SELECT * FROM discovered_contacts WHERE organization_id = $1 AND tenant_id = $2`,
+      [matchedOrg.id, tenantId],
+    );
+    contacts = contactsResult.rows;
+  }
+
+  const evidence = buildRecomputeEvidenceMap(lead, criteria, matchedOrg, contacts);
+  const scored = scoreLead(criteria, evidence);
+
+  const upserted = await tenantDb.query(
+    `INSERT INTO lead_scores (tenant_id, project_id, lead_id, rubric_id, total_score, criteria_evidence, why_summary, next_research_note, computed_at)
+     VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, now())
+     ON CONFLICT (lead_id) DO UPDATE SET
+       rubric_id = EXCLUDED.rubric_id,
+       total_score = EXCLUDED.total_score,
+       criteria_evidence = EXCLUDED.criteria_evidence,
+       why_summary = EXCLUDED.why_summary,
+       next_research_note = EXCLUDED.next_research_note,
+       computed_at = EXCLUDED.computed_at
+     RETURNING *`,
+    [
+      tenantId,
+      projectId,
+      leadId,
+      rubric.id,
+      scored.totalScore,
+      JSON.stringify(scored.criteriaEvidence),
+      scored.whySummary,
+      scored.nextResearchNote,
+    ],
+  );
+
+  return upserted.rows[0];
+}
+
+/**
  * POST /lead-scores/:leadId/recompute
  *
- * Loads the project's active scoring_rubrics row (404 if none), assembles a
- * best-effort evidence map per criterion (see buildRecomputeEvidenceMap's
- * doc comment for exactly what it checks and why it's a heuristic), scores
- * the lead with the same pure algorithm as the worker's `lead-scoring`
- * agent (ported to apps/api/src/lib/scoreLead.ts — apps/api has no runtime
- * dependency on @devlaunch/worker, so this small, pure function is
- * duplicated rather than adding one for a single computation), and
- * upserts (on lead_id) the lead_scores row. This runs synchronously inline
- * rather than via the BullMQ agent-execution path since it's a cheap, pure
- * computation over already-persisted data, not an external call.
+ * Thin HTTP wrapper around recomputeLeadScore (above): same query sequence
+ * the original inline implementation used (lead lookup, then active-rubric
+ * lookup, then org/contact evidence lookups, then the upsert) — 404s
+ * instead of silently no-opping when there's no active rubric or the lead
+ * doesn't exist, since a human explicitly asked for a recompute here and
+ * deserves to know why nothing happened (unlike the evidence-change call
+ * sites in leadIntelligence.ts/replies.ts, which treat the same null
+ * return as a normal no-op).
  */
 leadScoresRouter.post("/:leadId/recompute", async (req, res, next) => {
   try {
     const projectId = paramId(req, "projectId");
     const leadId = paramId(req, "leadId");
     await assertProjectInTenant(req, projectId);
-    const lead = await loadLeadOr404(req, projectId, leadId);
 
-    const rubricResult = await req.tenantDb!.query(
-      `SELECT * FROM scoring_rubrics WHERE tenant_id = $1 AND project_id = $2 AND is_active = true
-       ORDER BY updated_at DESC LIMIT 1`,
-      [req.tenantId, projectId],
-    );
-    if (rubricResult.rowCount === 0) throw Errors.notFound("No active rubric for this project");
-    const rubric = rubricResult.rows[0];
-    const criteria = (rubric.criteria ?? []) as ScoreLeadCriterion[];
+    const score = await recomputeLeadScore(req.tenantDb!, req.tenantId!, projectId, leadId);
+    if (!score) throw Errors.notFound("Lead not found, or no active rubric for this project");
 
-    const emailDomain = typeof lead.email === "string" ? normalizeDomain(lead.email.split("@")[1]) : null;
-    const companyName = typeof lead.company === "string" ? normalizeOrgName(lead.company) : null;
-
-    let matchedOrg: Record<string, unknown> | null = null;
-    if (emailDomain) {
-      const byDomain = await req.tenantDb!.query(
-        `SELECT * FROM discovered_organizations WHERE tenant_id = $1 AND project_id = $2 AND normalized_domain = $3 LIMIT 1`,
-        [req.tenantId, projectId, emailDomain],
-      );
-      if (byDomain.rowCount && byDomain.rowCount > 0) matchedOrg = byDomain.rows[0];
-    }
-    if (!matchedOrg && companyName) {
-      const byName = await req.tenantDb!.query(
-        `SELECT * FROM discovered_organizations WHERE tenant_id = $1 AND project_id = $2 AND normalized_name = $3 LIMIT 1`,
-        [req.tenantId, projectId, companyName],
-      );
-      if (byName.rowCount && byName.rowCount > 0) matchedOrg = byName.rows[0];
-    }
-
-    let contacts: Record<string, unknown>[] = [];
-    if (matchedOrg) {
-      const contactsResult = await req.tenantDb!.query(
-        `SELECT * FROM discovered_contacts WHERE organization_id = $1 AND tenant_id = $2`,
-        [matchedOrg.id, req.tenantId],
-      );
-      contacts = contactsResult.rows;
-    }
-
-    const evidence = buildRecomputeEvidenceMap(lead, criteria, matchedOrg, contacts);
-    const scored = scoreLead(criteria, evidence);
-
-    const upserted = await req.tenantDb!.query(
-      `INSERT INTO lead_scores (tenant_id, project_id, lead_id, rubric_id, total_score, criteria_evidence, why_summary, next_research_note, computed_at)
-       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, now())
-       ON CONFLICT (lead_id) DO UPDATE SET
-         rubric_id = EXCLUDED.rubric_id,
-         total_score = EXCLUDED.total_score,
-         criteria_evidence = EXCLUDED.criteria_evidence,
-         why_summary = EXCLUDED.why_summary,
-         next_research_note = EXCLUDED.next_research_note,
-         computed_at = EXCLUDED.computed_at
-       RETURNING *`,
-      [
-        req.tenantId,
-        projectId,
-        leadId,
-        rubric.id,
-        scored.totalScore,
-        JSON.stringify(scored.criteriaEvidence),
-        scored.whySummary,
-        scored.nextResearchNote,
-      ],
-    );
-
-    res.status(200).json({ score: upserted.rows[0] });
+    res.status(200).json({ score });
   } catch (err) {
     next(err);
   }

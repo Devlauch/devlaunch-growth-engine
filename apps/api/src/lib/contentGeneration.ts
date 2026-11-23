@@ -5,21 +5,41 @@
  * formats. Maintain each client's brand voice.").
  *
  * IMPORTANT — exactly like apps/worker/src/agents/messageDrafting.ts and
- * apps/api/src/lib/draftMessage.ts, this is NOT a call to an external LLM
- * API. This environment has no LLM API key wired up, and fabricating a
- * "real AI-generated" claim would violate this codebase's no-fake-data
- * convention. Every piece of content below is assembled out of (a) the
- * project's own `project_profiles` row (company_name/industry/
- * value_proposition — the project's real brand-voice anchor) and (b) the
- * optional `icp_profiles` row's real segment/pain_points/channels data.
- * Nothing here is Lorem-ipsum or invented fact about the business —
- * titles/bodies are built by combining those real fields through a fixed
- * set of phrasing templates and a small industry tone lookup table (see
- * `INDUSTRY_TONE`, which intentionally mirrors the four industries already
- * defined in apps/api/src/lib/industryTemplates.ts). Swapping in a real LLM
- * call behind these same function signatures is a natural future upgrade,
- * not something to fake now.
+ * apps/api/src/lib/draftMessage.ts, `generateContentCalendar`/
+ * `repurposeContent` below are NOT calls to an external LLM API. Every
+ * piece of content they produce is assembled out of (a) the project's own
+ * `project_profiles` row (company_name/industry/value_proposition — the
+ * project's real brand-voice anchor) and (b) the optional `icp_profiles`
+ * row's real segment/pain_points/channels data. Nothing here is
+ * Lorem-ipsum or invented fact about the business — titles/bodies are
+ * built by combining those real fields through a fixed set of phrasing
+ * templates and a small industry tone lookup table (see `INDUSTRY_TONE`,
+ * which intentionally mirrors the four industries already defined in
+ * apps/api/src/lib/industryTemplates.ts). `repurposeContent` stays
+ * deterministic-only permanently (it extracts from the source draft's own
+ * real text — see its own doc comment — an LLM has nothing honest to add
+ * there beyond what's already literally in the source).
+ *
+ * `enhanceBlogBodyWithLlm` below (Milestone 5 (P4) enhancement seam, same
+ * "deterministic-first, LLM strictly additive, opt-in, budget-enforced"
+ * convention as marketingQa.ts's tryLlmExplanation and
+ * aiSalesAssistant.ts's tryLlmText) is the one genuine LLM wiring gap this
+ * file had: apps/api/src/lib/llmProvider.ts/llmBudget.ts were real and
+ * configured-but-unused here even though they already had other real call
+ * sites elsewhere in the codebase. It is called ONLY when a caller
+ * explicitly opts in (contentStrategy.ts's POST /content-calendars
+ * `enhanceBlogsWithLlm` flag) AND a real ANTHROPIC_API_KEY is configured
+ * AND the tenant's monthly LLM token budget isn't already exceeded — never
+ * replacing `buildBlog`'s deterministic output as the default, only
+ * optionally polishing it, with the result honestly labeled via
+ * content_calendar_items.generation_method ('template' vs 'llm' — see
+ * migration 562).
  */
+
+import type pg from "pg";
+import { getLlmProvider } from "./llmProvider.js";
+import { isLlmBudgetExceeded, recordLlmUsage } from "./llmBudget.js";
+import { logger } from "./logger.js";
 
 export interface ProjectProfileInput {
   company_name: string | null;
@@ -394,3 +414,65 @@ export function repurposeContent(
 }
 
 export { brandVoiceNote };
+
+// ---------------------------------------------------------------------------
+// Opt-in LLM enhancement for a blog item's body (see header comment above).
+// ---------------------------------------------------------------------------
+
+export type BlogLlmEnhancementStatus = "ok" | "not_configured" | "budget_exceeded" | "error";
+
+export interface BlogLlmEnhancementResult {
+  status: BlogLlmEnhancementStatus;
+  /** The real, LLM-generated body text, or `null` for every non-"ok" status. Callers must keep the original deterministic template body whenever this is null. */
+  body: string | null;
+}
+
+/**
+ * Asks a real, configured LLM to rewrite one already-generated,
+ * deterministic blog body into a more natural-sounding, longer article —
+ * grounded strictly in the facts already present in `templateBody` (the
+ * prompt explicitly forbids inventing new facts, numbers, or claims).
+ * Never called unless the caller has opted in; never throws — every
+ * failure mode (not configured, budget exceeded, network/API error)
+ * resolves to `{ status: <reason>, body: null }` so the caller's existing
+ * deterministic `templateBody` is always the safe, honest fallback.
+ */
+export async function enhanceBlogBodyWithLlm(
+  tenantDb: pg.PoolClient,
+  tenantId: string,
+  projectId: string,
+  title: string,
+  templateBody: string,
+): Promise<BlogLlmEnhancementResult> {
+  const provider = getLlmProvider();
+  if (!provider.isConfigured) return { status: "not_configured", body: null };
+
+  try {
+    if (await isLlmBudgetExceeded(tenantDb, tenantId)) {
+      return { status: "budget_exceeded", body: null };
+    }
+
+    const prompt =
+      `Rewrite the following blog post draft into a more polished, natural-sounding article body of ` +
+      `roughly 350-550 words. Keep every fact, claim, and detail already present in the draft — do not invent ` +
+      `new facts, numbers, prices, customer names, or claims about the business beyond what's in the draft below.\n\n` +
+      `Title: ${title}\n\n` +
+      `Draft:\n${templateBody}`;
+
+    const result = await provider.complete(prompt, {
+      maxTokens: 900,
+      systemPrompt:
+        "You are a marketing editor who polishes draft blog posts for tone and flow. Never invent facts, numbers, or claims not present in the draft you are given.",
+    });
+    await recordLlmUsage(tenantDb, tenantId, projectId, result, { feature: "content_generation_blog_enhancement" });
+
+    const text = result.text.trim();
+    return text.length > 0 ? { status: "ok", body: text } : { status: "error", body: null };
+  } catch (err) {
+    logger.warn(
+      { err, tenantId, projectId },
+      "contentGeneration: LLM blog enhancement failed, falling back to the deterministic template body",
+    );
+    return { status: "error", body: null };
+  }
+}

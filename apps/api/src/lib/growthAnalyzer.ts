@@ -32,9 +32,21 @@ import {
   Crawl4AIUnreachableError,
   fetchCompetitorPage,
 } from "./crawl4aiClient.js";
-import { fetchSitemap, checkRobotsTxt, runSiteAudit, type SiteAuditIssue } from "./siteAudit.js";
+import { fetchSitemap, checkRobotsTxt, runSiteAudit, type SiteAuditIssue, type FetchLike } from "./siteAudit.js";
 import { extractKeywords, type ExtractedKeyword } from "./keywordExtraction.js";
 import { stripHtml, extractTitle } from "./htmlText.js";
+import { safeFetch } from "./ssrfGuard.js";
+
+/**
+ * SSRF guard: `discoverPages`/`runGrowthAnalysis` fetch the tenant-supplied
+ * `domain` directly (sitemap.xml/robots.txt/site-audit pages), so
+ * `fetchImpl` defaults to `safeFetch` (../lib/ssrfGuard.ts), not bare
+ * `fetch` — see siteAudit.ts's own doc comment for the full rationale.
+ * `crawlPages` below goes through `fetchCompetitorPage`
+ * (../lib/crawl4aiClient.ts), which validates every URL the same way before
+ * handing it to Crawl4AI.
+ */
+import { assertSafeUrl, SsrfBlockedError } from "./ssrfGuard.js";
 
 const MAX_PAGES_TO_CRAWL = 15;
 const MAX_CONCURRENCY = 5;
@@ -99,7 +111,7 @@ async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T)
  */
 export async function discoverPages(
   domain: string,
-  fetchImpl: typeof fetch = fetch,
+  fetchImpl: FetchLike = safeFetch,
 ): Promise<{ urls: string[]; sitemapFound: boolean; robotsFound: boolean }> {
   const root = toRootUrl(domain);
   const [sitemap, robotsFound] = await Promise.all([
@@ -377,9 +389,41 @@ export function computeContentGaps(
  */
 export async function runGrowthAnalysis(
   domain: string,
-  opts: { fetchImpl?: typeof fetch } = {},
+  opts: { fetchImpl?: FetchLike } = {},
 ): Promise<GrowthAnalysisResult> {
-  const fetchImpl = opts.fetchImpl ?? fetch;
+  const fetchImpl = opts.fetchImpl ?? safeFetch;
+
+  // SSRF guard: domain is attacker-controlled (this function is reachable
+  // from the unauthenticated public growth-audit endpoint,
+  // routes/publicGrowth.ts). Validated BEFORE any fetch — directly via
+  // fetchImpl (discoverPages/runSiteAudit below) or indirectly by handing
+  // the URL to the separate Crawl4AI service (crawlPages/crawl4aiClient.ts)
+  // — the SSRF risk is identical either way, per ssrfGuard.ts's own doc
+  // comment. Never throws out of this function (same "never throws for a
+  // crawl failure" contract as the rest of runGrowthAnalysis): an unsafe
+  // domain is reported as an honest failed analysis, not a 500.
+  try {
+    await assertSafeUrl(toRootUrl(domain));
+  } catch (err) {
+    const message = err instanceof SsrfBlockedError ? err.message : `Refusing to crawl "${domain}": ${String(err)}`;
+    return {
+      domain,
+      status: "failed",
+      pagesDiscovered: 0,
+      pagesCrawled: 0,
+      crawlError: message,
+      sitemapFound: false,
+      robotsFound: false,
+      extractedKeywords: [],
+      productsServices: [],
+      valuePropositions: [],
+      targetAudienceSignals: [],
+      recommendedIcp: { industries: [], geographies: [], segments: [], rationale: "No pages were crawled — no ICP signal available." },
+      conversionOpportunities: [],
+      growthPlanSummary: `We were unable to analyze ${domain}: this domain resolves to a private or internal address and cannot be crawled.`,
+    };
+  }
+
   const { urls, sitemapFound, robotsFound } = await discoverPages(domain, fetchImpl);
 
   let pages: CrawledGrowthPage[] = [];

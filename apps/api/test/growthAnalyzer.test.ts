@@ -14,6 +14,42 @@ vi.mock("../src/db/pool.js", () => ({
   pool: { connect: connectMock },
 }));
 
+// SSRF guard (../src/lib/ssrfGuard.js) does real DNS resolution + a pinned
+// http/https connection by design (see docs/SECURITY_HARDENING_MILESTONE_1.md)
+// — neutralize it here so these route-level tests keep intercepting outbound
+// requests at the global-`fetch` layer (stubHealthyDomainFetch below), same
+// as before this hardening pass, instead of hitting a real network. Real
+// DNS/rebinding/private-IP behavior is covered for real in
+// test/ssrfGuard.test.ts.
+vi.mock("../src/lib/ssrfGuard.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/lib/ssrfGuard.js")>();
+  return {
+    ...actual,
+    assertSafeUrl: vi.fn(async () => {}),
+    safeFetch: vi.fn((url: string, init?: unknown) => (globalThis.fetch as typeof fetch)(url, init as RequestInit)),
+  };
+});
+
+// growthAnalyzer.ts's runGrowthAnalysis now runs every domain through
+// ssrfGuard.ts's assertSafeUrl before crawling (Milestone 7 gap-close: this
+// function is reachable from the unauthenticated public growth-audit
+// endpoint). assertSafeUrl does a REAL DNS resolve4/resolve6 lookup, which
+// would otherwise either fail (no network in CI) or nondeterministically
+// depend on real DNS for this file's fake "acme.example.com"/"example.com"
+// test domains. Stubbed here at the node:dns boundary — same unit-test
+// isolation convention as the fetch stub below — to a real, public,
+// non-reserved IP (same one example.com's own real DNS resolves to), so
+// every existing test keeps exercising its own actual scenario rather than
+// being blocked by this unrelated new guard.
+vi.mock("node:dns", () => ({
+  promises: {
+    resolve4: vi.fn(async () => ["93.184.216.34"]),
+    resolve6: vi.fn(async () => {
+      throw Object.assign(new Error("no AAAA"), { code: "ENODATA" });
+    }),
+  },
+}));
+
 const { growthAnalyzerRouter } = await import("../src/routes/growthAnalyzer.js");
 const { errorHandler } = await import("../src/middleware/errorHandler.js");
 const {
@@ -270,6 +306,12 @@ describe("POST /growth-analyses/analyze", () => {
         rows: [{ id: ANALYSIS_1, domain: "acme.example.com", status: "failed" }],
       }, // INSERT growth_analyses
       { rowCount: 1, rows: [{ id: "rec-icp", recommendation_type: "icp" }] }, // INSERT icp recommendation
+      // The stubbed fetch 404s everything (including the root page for
+      // runSiteAudit's own link-status check), so the technical site audit
+      // honestly reports a high-severity broken_link issue even though the
+      // Crawl4AI crawl itself failed — that's a real, separate finding, so
+      // it still gets its own conversion_opportunity recommendation row.
+      { rowCount: 1, rows: [{ id: "rec-conv", recommendation_type: "conversion_opportunity" }] },
     ]);
 
     const res = await request(app)

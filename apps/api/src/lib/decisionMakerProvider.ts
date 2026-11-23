@@ -101,6 +101,39 @@ export function buildDecisionMakerWaterfall(): DecisionMakerProvider[] {
   return [new NotConfiguredDecisionMakerProvider()];
 }
 
+/**
+ * Tenant-aware waterfall (Milestone 6 / P5): composes the real providers
+ * this codebase has built so far — Hunter (hunterProvider.ts), Clearbit
+ * (clearbitProvider.ts), then Apollo (apolloProvider.ts, Phase 2 provider
+ * validation) — ahead of the honest NotConfiguredDecisionMakerProvider
+ * stub, each resolved per-tenant via integrationCredentials.ts. Each entry
+ * independently falls back to its own NotConfigured* stub when that
+ * specific provider has no credential for this tenant/project, so a
+ * waterfall run always has at least one real attempt recorded even when
+ * every provider is unconfigured (all "not configured" errors, same
+ * `findDecisionMakers()` classification as before).
+ *
+ * This is additive — `buildDecisionMakerWaterfall()` above is unchanged and
+ * still used wherever a synchronous, env-only waterfall is wanted (e.g.
+ * tests). Callers that have a tenantDb/tenantId/projectId in hand (the
+ * discovery/enrichment pipeline) should prefer this function instead.
+ */
+export async function buildDecisionMakerWaterfallForTenant(
+  tenantDb: Parameters<typeof import("./hunterProvider.js").buildHunterProvider>[0],
+  tenantId: string,
+  projectId: string,
+): Promise<DecisionMakerProvider[]> {
+  const { buildHunterProvider } = await import("./hunterProvider.js");
+  const { buildClearbitProvider } = await import("./clearbitProvider.js");
+  const { buildApolloProvider } = await import("./apolloProvider.js");
+  const [hunter, clearbit, apollo] = await Promise.all([
+    buildHunterProvider(tenantDb, tenantId, projectId),
+    buildClearbitProvider(tenantDb, tenantId, projectId),
+    buildApolloProvider(tenantDb, tenantId, projectId),
+  ]);
+  return [hunter, clearbit, apollo, new NotConfiguredDecisionMakerProvider()];
+}
+
 export interface DecisionMakerLookupOutcome {
   status: "found" | "not_configured" | "no_result";
   provider: string | null;

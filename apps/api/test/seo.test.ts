@@ -14,6 +14,21 @@ vi.mock("../src/db/pool.js", () => ({
   pool: { connect: connectMock },
 }));
 
+// SSRF guard (../src/lib/ssrfGuard.js) does real DNS resolution + a pinned
+// http/https connection by design (see docs/SECURITY_HARDENING_MILESTONE_1.md)
+// — neutralize it here so these tests keep intercepting outbound requests at
+// the global-`fetch`/injected-fetchImpl layer, instead of hitting a real
+// network. Real DNS/rebinding/private-IP behavior is covered for real in
+// test/ssrfGuard.test.ts.
+vi.mock("../src/lib/ssrfGuard.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/lib/ssrfGuard.js")>();
+  return {
+    ...actual,
+    assertSafeUrl: vi.fn(async () => {}),
+    safeFetch: vi.fn((url: string, init?: unknown) => (globalThis.fetch as typeof fetch)(url, init as RequestInit)),
+  };
+});
+
 const { seoRouter } = await import("../src/routes/seo.js");
 const { errorHandler } = await import("../src/middleware/errorHandler.js");
 const { fetchSitemap, checkRobotsTxt, checkLinkStatus, auditPageMetadata, runSiteAudit } = await import(

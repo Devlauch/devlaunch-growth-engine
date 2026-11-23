@@ -13,7 +13,13 @@ import type { PoolClient } from "pg";
 export type NotificationType =
   | "lead.captured"
   | "campaign.submitted_for_approval"
-  | "approval.decided";
+  | "approval.decided"
+  // Milestone 4 (P3): a real billing-provider webhook (Razorpay/Stripe —
+  // see routes/billingWebhooks.ts) marked a tenant's subscription
+  // past-due after a real payment-failure event. Added additively; the
+  // `type` column itself is plain `text` (no DB CHECK constraint — see
+  // migration 250_create_notifications.sql), so this needed no migration.
+  | "billing.payment_failed";
 
 export interface NotifyParams {
   client: PoolClient;

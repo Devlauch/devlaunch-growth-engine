@@ -40,3 +40,34 @@ leadsRouter.get("/", async (req, res, next) => {
     next(err);
   }
 });
+
+/**
+ * GET /:id — single lead detail, for the lead-detail dashboard page (shows
+ * core fields plus embeds the activity timeline / notes panel, which fetch
+ * their own data separately). Same tenant/project scoping as the list route
+ * above.
+ */
+leadsRouter.get("/:id", async (req, res, next) => {
+  try {
+    const projectId = z.string().uuid().parse((req.params as Record<string, string>).projectId);
+    const leadId = z.string().uuid().parse((req.params as Record<string, string>).id);
+
+    const project = await req.tenantDb!.query("SELECT 1 FROM projects WHERE id = $1 AND tenant_id = $2", [
+      projectId,
+      req.tenantId,
+    ]);
+    if (project.rowCount === 0) throw Errors.notFound("Project not found");
+
+    const result = await req.tenantDb!.query(
+      `SELECT id, name, email, company, message, source, status, created_at
+       FROM leads
+       WHERE id = $1 AND tenant_id = $2 AND project_id = $3`,
+      [leadId, req.tenantId, projectId],
+    );
+    if (result.rowCount === 0) throw Errors.notFound("Lead not found");
+
+    res.json({ lead: result.rows[0] });
+  } catch (err) {
+    next(err);
+  }
+});

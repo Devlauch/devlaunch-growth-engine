@@ -1,7 +1,27 @@
 # Feature Status — single source of truth
 
 **Last updated:** 2026-11-22
-**Updated by:** Claude (Milestone 3 Phase 1 — real-world smoke testing of
+**Updated by:** Claude (Milestone 3 Phase 2.5 — added two new features:
+**AI Growth Advisor** (`growth_advisor_recommendations`/`growth_advisor_actions`,
+migrations 432-436, `apps/api/src/lib/growthAdvisor.ts` /
+`routes/growthAdvisor.ts`, dashboard `GrowthAdvisorPage.tsx`) — 5 real,
+data-backed recommendation rules (invalid-email rate, unassigned leads, weak
+landing-page conversion, qualified-leads-not-converting, unresolved
+high-severity SEO issues), each with a real minimum sample size, plus one
+approval-gated action (auto-assign unassigned leads, reusing
+`leadPromotion.ts`'s round-robin, gated through the existing `approvals`
+table) — and **DevLaunch's own internal customer-acquisition workspace**
+(migrations 421-427, `publicGrowth.ts`/`internalGrowth.ts` routes, dashboard
+`AcquisitionWorkspacePage.tsx`) — a dedicated, RLS-isolated internal
+tenant/project with public unauthenticated growth-audit and demo-request
+capture (real crawl via `growthAnalyzer.ts`, real lead ingestion, per-IP
+rate-limited), trial-signup tracking, and CAC math that returns
+"insufficient_data" rather than a masked zero. Both reuse existing
+infrastructure (report pipeline, RBAC, audit_events, approvals, sequences/
+deals) rather than rebuilding it. Routers mounted in `app.ts`, dashboard
+routes/nav wired in `App.tsx`/`Layout.tsx`. Full `apps/api` suite verified
+green after reconciliation: 994/1002 passing, 8 honest pre-existing skips.
+See prior entry below for Milestone 3 Phase 1 — real-world smoke testing of
 Listmonk/Chatwoot/Postiz against genuinely running containers; fixed a
 critical platform-wide RLS-bypass finding and a route-shadowing bug; see
 `docs/MILESTONE_3_REPORT.md` for the full report)
@@ -549,3 +569,28 @@ pre-existing honest RLS-dependent skips, 1 unrelated failure in another
 concurrent session's own in-progress feature (`classifyObjection.test.ts`
 — not in any of this phase's 3 agents' scope, left to that session). Zero
 regressions from this phase's own work.
+
+## Open-source-inspired upgrade round (12 parallel workstreams)
+
+Full detail in `docs/OPEN_SOURCE_IMPLEMENTATION_REPORT.md`,
+`docs/NEW_FEATURE_ARCHITECTURE.md`, and `docs/NEW_FEATURE_TEST_REPORT.md`.
+
+- **Implemented, tested, wired**: native AI agent platform (14 specialized
+  agents over a shared tenant-aware runtime), native workflow automation
+  engine (n8n/Mautic both licensing-blocked from reuse, built independently),
+  growth-analytics upgrade (funnels/cohorts/journeys/segmentation over
+  existing site-analytics tables), approval-gated growth-experiment/A-B
+  testing engine, surveys & feedback intelligence, deep website/competitor
+  intelligence (structured extraction, change detection, content-gap
+  analysis), unified customer intelligence/timeline, prospecting & company
+  intelligence upgrades, sales-engagement intent/follow-up analytics, and a
+  social content calendar + conversation intelligence layer over the existing
+  Postiz/Chatwoot integrations.
+- **Verified**: `apps/api` tsc clean, 163/167 test files / 1518/1537 tests
+  passing; `apps/worker` tsc clean, 18/18 files / 112/112 tests passing;
+  `apps/dashboard` tsc clean, production build succeeds.
+- **Honest limitations**: no real LLM/SerpApi/Clearbit/ad-platform/WhatsApp/
+  payment credentials exist in this environment — every such capability
+  reports `not_configured`/`BLOCKED` rather than a fabricated result. Three
+  dashboard components are built but not yet dropped into host pages that
+  were mid-edit by a concurrent session during this round.

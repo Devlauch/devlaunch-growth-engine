@@ -105,6 +105,90 @@ describe("POST /message-drafts", () => {
     expect(insertDraftCall).toBeDefined();
   });
 
+  it("auto-assembles evidence from the lead's real lead_scores/buying_signals/icp_match_scores when evidenceSummary is omitted", async () => {
+    const app = buildApp();
+    queueResponses([
+      ...mockMembership(),
+      { rowCount: 1, rows: [{}] }, // project exists
+      { rowCount: 1, rows: [LEAD_ROW] }, // loadLeadOr404
+      { rowCount: 0, rows: [] }, // isSuppressed (not suppressed)
+      // loadLeadEvidence's three parallel queries, in order: lead_scores, buying_signals, icp_match_scores
+      {
+        rowCount: 1,
+        rows: [
+          {
+            total_score: 72,
+            why_summary: "This lead scores 72/100 against the active rubric.",
+            criteria_evidence: {
+              budget: { present: true, evidenceSummary: "Lead's custom_fields.budget is set" },
+              timeline: { present: false },
+            },
+          },
+        ],
+      },
+      { rowCount: 1, rows: [{ signal_type: "hiring", detail: "Posted 3 sales roles", confidence: "high" }] },
+      { rowCount: 1, rows: [{ match_score: 88, match_reasons: ["Matches company size band"], icp_profile_name: "Mid-market SaaS" }] },
+      {
+        rowCount: 1,
+        rows: [
+          {
+            id: DRAFT_1,
+            tenant_id: TENANT_A,
+            project_id: PROJECT_1,
+            lead_id: LEAD_1,
+            status: "draft",
+            approval_id: null,
+            evidence_summary: "This lead scores 72/100 against the active rubric.",
+            unsourced_claims: [],
+          },
+        ],
+      }, // INSERT message_drafts
+      { rowCount: 1, rows: [{ id: "v1", channel: "email" }] },
+      { rowCount: 1, rows: [{ id: "v2", channel: "whatsapp" }] },
+      { rowCount: 1, rows: [{ id: "v3", channel: "call_script" }] },
+      { rowCount: 1, rows: [{ id: "v4", channel: "linkedin_note" }] },
+      undefined, // audit insert
+    ]);
+
+    const res = await request(app)
+      .post(`/api/v1/tenants/${TENANT_A}/projects/${PROJECT_1}/message-drafts`)
+      .set("X-Dev-User-Id", USER_1)
+      .send({ leadId: LEAD_1, approvedClaims: ["We cut onboarding time in half"] });
+
+    expect(res.status).toBe(201);
+    expect(res.body.evidenceAutoAssembled).toBe(true);
+    expect(res.body.messageDraft.evidence_summary).toBe("This lead scores 72/100 against the active rubric.");
+
+    const insertDraftCall = queryMock.mock.calls.find(
+      ([sql]) => typeof sql === "string" && sql.includes("INSERT INTO message_drafts"),
+    );
+    // facts assembled, in order: rubric criterion evidence, then buying signal, then ICP match
+    expect(insertDraftCall![1][3]).toBe("This lead scores 72/100 against the active rubric.");
+  });
+
+  it("400s instead of fabricating evidence when evidenceSummary is omitted and the lead has no score/signal/ICP match yet", async () => {
+    const app = buildApp();
+    queueResponses([
+      ...mockMembership(),
+      { rowCount: 1, rows: [{}] }, // project exists
+      { rowCount: 1, rows: [LEAD_ROW] }, // loadLeadOr404
+      { rowCount: 0, rows: [] }, // isSuppressed (not suppressed)
+      { rowCount: 0, rows: [] }, // lead_scores: none
+      { rowCount: 0, rows: [] }, // buying_signals: none
+      { rowCount: 0, rows: [] }, // icp_match_scores: none
+    ]);
+
+    const res = await request(app)
+      .post(`/api/v1/tenants/${TENANT_A}/projects/${PROJECT_1}/message-drafts`)
+      .set("X-Dev-User-Id", USER_1)
+      .send({ leadId: LEAD_1 });
+
+    expect(res.status).toBe(400);
+    expect(
+      queryMock.mock.calls.some(([sql]) => typeof sql === "string" && sql.includes("INSERT INTO message_drafts")),
+    ).toBe(false);
+  });
+
   it("404s when the lead does not belong to this tenant/project", async () => {
     const app = buildApp();
     queueResponses([

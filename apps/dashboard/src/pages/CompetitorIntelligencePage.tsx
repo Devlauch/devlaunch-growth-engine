@@ -64,12 +64,50 @@ interface CompetitorCrawlResult {
   changesDetected: CompetitorChange[];
 }
 
+interface PricingSignal {
+  sentence: string;
+  pageUrl: string;
+}
+
 interface CompetitorReport {
   competitor: Competitor;
   latestSnapshot: CompetitorSnapshot | null;
   recentChanges: CompetitorChange[];
   topKeywords: ExtractedKeyword[];
   positioningSummary: string;
+  pricingSignals: PricingSignal[];
+}
+
+// Phase 4b: competitor discovery + keyword opportunities. Shapes mirror
+// apps/api/src/lib/competitorDiscoveryProvider.ts and
+// apps/api/src/lib/keywordOpportunities.ts exactly.
+
+interface CompetitorCandidate {
+  domain: string;
+  title: string | null;
+  snippet: string | null;
+  matchedQuery: string;
+  sourceUrl: string | null;
+}
+
+interface DiscoveryResult {
+  configured: boolean;
+  message: string;
+  queriesRun: string[];
+  candidates: CompetitorCandidate[];
+}
+
+interface KeywordOpportunity {
+  keyword: string;
+  competitorCount: number;
+  combinedFrequency: number;
+  competitors: Array<{ competitorName: string; frequency: number }>;
+}
+
+interface KeywordOpportunitiesResult {
+  hasOwnSiteData: boolean;
+  hasCompetitorData: boolean;
+  opportunities: KeywordOpportunity[];
 }
 
 function changeTypeTone(changeType: CompetitorChangeType): "neutral" | "info" | "success" | "warn" | "danger" {
@@ -108,6 +146,16 @@ export function CompetitorIntelligencePage() {
   const [report, setReport] = useState<CompetitorReport | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+
+  // Phase 4b: competitor auto-discovery
+  const [discovering, setDiscovering] = useState(false);
+  const [discoveryResult, setDiscoveryResult] = useState<DiscoveryResult | null>(null);
+  const [discoveryError, setDiscoveryError] = useState<string | null>(null);
+
+  // Phase 4b: keyword opportunities
+  const [opportunities, setOpportunities] = useState<KeywordOpportunitiesResult | null>(null);
+  const [opportunitiesError, setOpportunitiesError] = useState<string | null>(null);
+  const [opportunitiesLoading, setOpportunitiesLoading] = useState(false);
 
   const load = useCallback(async () => {
     if (!tenantId || !projectId) return;
@@ -191,6 +239,49 @@ export function CompetitorIntelligencePage() {
     } finally {
       setCrawlingId(null);
     }
+  }
+
+  async function handleDiscover() {
+    if (!tenantId || !projectId) return;
+    setDiscoveryError(null);
+    setDiscovering(true);
+    try {
+      const result = await api.post<DiscoveryResult>(
+        `/tenants/${tenantId}/projects/${projectId}/competitors/discover`,
+      );
+      setDiscoveryResult(result);
+    } catch (err) {
+      setDiscoveryError(err instanceof ApiError ? err.message : "Competitor discovery failed.");
+    } finally {
+      setDiscovering(false);
+    }
+  }
+
+  const loadOpportunities = useCallback(async () => {
+    if (!tenantId || !projectId) return;
+    setOpportunitiesError(null);
+    setOpportunitiesLoading(true);
+    try {
+      const result = await api.get<KeywordOpportunitiesResult>(
+        `/tenants/${tenantId}/projects/${projectId}/competitors/keyword-opportunities`,
+      );
+      setOpportunities(result);
+    } catch (err) {
+      setOpportunitiesError(err instanceof ApiError ? err.message : "Could not load keyword opportunities.");
+    } finally {
+      setOpportunitiesLoading(false);
+    }
+  }, [tenantId, projectId]);
+
+  useEffect(() => {
+    loadOpportunities();
+  }, [loadOpportunities]);
+
+  function handleAddCandidate(candidate: CompetitorCandidate) {
+    setName(candidate.title ?? candidate.domain);
+    setDomain(candidate.domain);
+    setNotes(`Found via competitor auto-discovery (query: ${candidate.matchedQuery}).`);
+    setFormOpen(true);
   }
 
   function handleSelect(competitorId: string) {
@@ -297,6 +388,86 @@ export function CompetitorIntelligencePage() {
         )}
       </section>
 
+      <section className="panel">
+        <h2>Competitor auto-discovery</h2>
+        <p className="callout">
+          Searches real Google results (via a configured search provider) for this project's own top extracted
+          keywords/products to surface candidate competitors — nothing here is guessed or invented, and no
+          candidate is ever added automatically. Run a growth analysis for this project first so there's real data
+          to search from.
+        </p>
+        <button type="button" className="btn btn-secondary" disabled={discovering} onClick={handleDiscover}>
+          {discovering ? "Searching..." : "Discover competitors"}
+        </button>
+        <ErrorBanner message={discoveryError} />
+        {discoveryResult ? (
+          <>
+            <p className="muted">{discoveryResult.message}</p>
+            {discoveryResult.candidates.length > 0 ? (
+              <ul className="card-list card-list-static">
+                {discoveryResult.candidates.map((c) => (
+                  <li key={c.domain} className="card-list-item card-list-item-static">
+                    <div>
+                      <strong>{c.title ?? c.domain}</strong>
+                      <span className="muted"> · {c.domain}</span>
+                      {c.snippet ? <div className="muted">{c.snippet}</div> : null}
+                    </div>
+                    <button type="button" className="btn btn-secondary btn-small" onClick={() => handleAddCandidate(c)}>
+                      Add as competitor
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </>
+        ) : null}
+      </section>
+
+      <section className="panel">
+        <h2>Keyword opportunities</h2>
+        <p className="callout">
+          Real keywords found in tracked competitors' crawled content that don't appear in this project's own
+          crawled content — ranked by how many competitors use the term and their combined real term-frequency
+          count. There is no search-volume API integrated here, so this is never presented as search volume.
+        </p>
+        <ErrorBanner message={opportunitiesError} />
+        {opportunitiesLoading ? (
+          <p className="muted">Loading...</p>
+        ) : opportunities === null ? null : !opportunities.hasOwnSiteData ? (
+          <EmptyState
+            title="No own-site keyword data yet"
+            hint="Run a growth analysis for this project to extract this site's own keywords."
+          />
+        ) : !opportunities.hasCompetitorData ? (
+          <EmptyState title="No tracked competitors with crawled content yet" hint="Add and crawl a competitor above." />
+        ) : opportunities.opportunities.length === 0 ? (
+          <EmptyState title="No keyword gaps found" hint="Tracked competitors don't use any terms this site doesn't already use." />
+        ) : (
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Keyword</th>
+                  <th>Competitors using it</th>
+                  <th>Combined frequency</th>
+                </tr>
+              </thead>
+              <tbody>
+                {opportunities.opportunities.map((o) => (
+                  <tr key={o.keyword}>
+                    <td>{o.keyword}</td>
+                    <td>{o.competitors.map((c) => c.competitorName).join(", ")}</td>
+                    <td>
+                      <Badge tone="neutral">{o.combinedFrequency}</Badge>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
       {selectedCompetitor ? (
         <section className="panel">
           <h2>Report: {selectedCompetitor.name}</h2>
@@ -319,6 +490,29 @@ export function CompetitorIntelligencePage() {
                     <li key={k.keyword} className="card-list-item card-list-item-static">
                       <span>{k.keyword}</span>
                       <Badge tone="neutral">{k.frequency}</Badge>
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              <h3>Pricing &amp; positioning signals</h3>
+              {report.pricingSignals.length === 0 ? (
+                <EmptyState
+                  title="No pricing/plan language found"
+                  hint="This competitor's crawled pages don't mention pricing/plans/tiers, or it hasn't been crawled yet."
+                />
+              ) : (
+                <ul className="card-list card-list-static">
+                  {report.pricingSignals.map((signal, i) => (
+                    <li key={i} className="card-list-item card-list-item-static">
+                      <div>
+                        <span>&ldquo;{signal.sentence}&rdquo;</span>
+                        <div className="muted">
+                          <a href={signal.pageUrl} target="_blank" rel="noreferrer">
+                            {signal.pageUrl}
+                          </a>
+                        </div>
+                      </div>
                     </li>
                   ))}
                 </ul>

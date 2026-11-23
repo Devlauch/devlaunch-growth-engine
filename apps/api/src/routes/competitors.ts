@@ -11,8 +11,12 @@ import {
   Crawl4AIUnreachableError,
   fetchCompetitorPage,
 } from "../lib/crawl4aiClient.js";
+import { SsrfBlockedError } from "../lib/ssrfGuard.js";
 import { detectCompetitorChanges, type SnapshotPage } from "../lib/competitorChangeDetection.js";
 import { stripHtml, extractTitle } from "../lib/htmlText.js";
+import { discoverCompetitorCandidates } from "../lib/competitorDiscoveryProvider.js";
+import { computeKeywordOpportunities } from "../lib/keywordOpportunities.js";
+import { extractPricingSignals, buildPricingSummaryLine } from "../lib/positioningInsights.js";
 
 /**
  * Mounted at /api/v1/tenants/:tenantId/projects/:projectId/competitors
@@ -163,6 +167,123 @@ competitorsRouter.delete("/:id", async (req, res, next) => {
 });
 
 // ---------------------------------------------------------------------------
+// Business intelligence: auto-discovery + keyword opportunities (Phase 4b)
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /discover
+ *
+ * Competitor auto-discovery. Uses this project's own latest growth_analyses
+ * row (populated by POST .../growth-analyses/analyze — routes/growthAnalyzer.ts)
+ * as the source of real search terms (products_services, falling back to
+ * extracted_keywords), and this project's already-tracked competitor
+ * domains as an exclude list, then runs ../lib/competitorDiscoveryProvider.ts.
+ * Never auto-adds a competitor — returns candidates for a human to review
+ * and add via POST / above. Honestly reports `configured: false` (never a
+ * fabricated candidate list) when no search provider (SERPAPI_API_KEY) is
+ * configured.
+ */
+competitorsRouter.post("/discover", async (req, res, next) => {
+  try {
+    const projectId = paramId(req, "projectId");
+    await assertProjectInTenant(req, projectId);
+
+    const latestAnalysisResult = await req.tenantDb!.query(
+      `SELECT domain, products_services, extracted_keywords FROM growth_analyses
+       WHERE tenant_id = $1 AND project_id = $2 AND status <> 'failed'
+       ORDER BY created_at DESC LIMIT 1`,
+      [req.tenantId, projectId],
+    );
+    const latestAnalysis = latestAnalysisResult.rows[0] ?? null;
+
+    if (!latestAnalysis) {
+      res.json({
+        configured: true,
+        message:
+          "No growth analysis has been run for this project yet — run POST .../growth-analyses/analyze first so " +
+          "there is real, crawled data about this project's own site to search from.",
+        queriesRun: [],
+        candidates: [],
+      });
+      return;
+    }
+
+    const existingDomainsResult = await req.tenantDb!.query(
+      `SELECT domain FROM competitors WHERE tenant_id = $1 AND project_id = $2`,
+      [req.tenantId, projectId],
+    );
+    const excludeDomains: string[] = existingDomainsResult.rows.map((r: { domain: string }) => r.domain);
+
+    const productsServices: string[] = latestAnalysis.products_services ?? [];
+    const extractedKeywords: ExtractedKeyword[] = latestAnalysis.extracted_keywords ?? [];
+    const searchTerms =
+      productsServices.length > 0 ? productsServices : extractedKeywords.map((k) => k.keyword);
+
+    const result = await discoverCompetitorCandidates({
+      ownDomain: latestAnalysis.domain,
+      searchTerms,
+      excludeDomains,
+    });
+
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * GET /keyword-opportunities
+ *
+ * Real keywords that appear in at least one tracked competitor's latest
+ * crawled content but not in this project's own latest crawled content
+ * (growth_analyses.extracted_keywords), ranked by real observed signal
+ * (how many competitors use the term, and their combined term-frequency) —
+ * never an invented "search volume". See ../lib/keywordOpportunities.ts.
+ */
+competitorsRouter.get("/keyword-opportunities", async (req, res, next) => {
+  try {
+    const projectId = paramId(req, "projectId");
+    await assertProjectInTenant(req, projectId);
+
+    const latestAnalysisResult = await req.tenantDb!.query(
+      `SELECT extracted_keywords FROM growth_analyses
+       WHERE tenant_id = $1 AND project_id = $2 AND status <> 'failed'
+       ORDER BY created_at DESC LIMIT 1`,
+      [req.tenantId, projectId],
+    );
+    const ownKeywords: ExtractedKeyword[] = latestAnalysisResult.rows[0]?.extracted_keywords ?? [];
+
+    const competitorKeywordsResult = await req.tenantDb!.query(
+      `SELECT c.name AS competitor_name, s.extracted_keywords
+       FROM competitors c
+       JOIN LATERAL (
+         SELECT extracted_keywords FROM competitor_snapshots
+         WHERE competitor_id = c.id AND tenant_id = c.tenant_id
+         ORDER BY crawled_at DESC LIMIT 1
+       ) s ON true
+       WHERE c.tenant_id = $1 AND c.project_id = $2`,
+      [req.tenantId, projectId],
+    );
+    const competitorKeywordSets = competitorKeywordsResult.rows.map(
+      (row: { competitor_name: string; extracted_keywords: ExtractedKeyword[] }) => ({
+        competitorName: row.competitor_name,
+        keywords: row.extracted_keywords,
+      }),
+    );
+
+    const opportunities = computeKeywordOpportunities(ownKeywords, competitorKeywordSets);
+
+    res.json({
+      hasOwnSiteData: ownKeywords.length > 0,
+      hasCompetitorData: competitorKeywordSets.length > 0,
+      opportunities,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Crawl + diff
 // ---------------------------------------------------------------------------
 
@@ -214,6 +335,9 @@ competitorsRouter.post("/:id/crawl", async (req, res, next) => {
       }
       if (err instanceof Crawl4AIUnreachableError) {
         throw Errors.badGateway(err.message);
+      }
+      if (err instanceof SsrfBlockedError) {
+        throw Errors.badRequest(err.message);
       }
       throw err;
     }
@@ -312,7 +436,9 @@ competitorsRouter.get("/:id/changes", async (req, res, next) => {
  * A real, generated-from-real-data report — never an LLM-written
  * narrative. `positioningSummary` is short, templated text built directly
  * from the competitor's latest snapshot's top keywords and the count of
- * changes detected in the last 30 days.
+ * changes detected in the last 30 days. `pricingSignals` (Phase 4b) are
+ * real, verbatim pricing/plan/tier sentences extracted from the
+ * competitor's latest crawled pages — see ../lib/positioningInsights.ts.
  */
 competitorsRouter.get("/:id/report", async (req, res, next) => {
   try {
@@ -337,6 +463,8 @@ competitorsRouter.get("/:id/report", async (req, res, next) => {
     const recentChanges = recentChangesResult.rows;
 
     const topKeywords: ExtractedKeyword[] = latestSnapshot ? latestSnapshot.extracted_keywords : [];
+    const pages: SnapshotPage[] = latestSnapshot ? latestSnapshot.pages ?? [] : [];
+    const pricingSignals = extractPricingSignals(pages);
 
     let positioningSummary: string;
     if (!latestSnapshot) {
@@ -349,7 +477,8 @@ competitorsRouter.get("/:id/report", async (req, res, next) => {
       const topFiveText = topFive.length > 0 ? topFive : "no recurring terms found yet";
       positioningSummary =
         `Top recurring terms on ${competitor.domain}: ${topFiveText}. ` +
-        `${recentChanges.length} change(s) detected in the last 30 days.`;
+        `${recentChanges.length} change(s) detected in the last 30 days. ` +
+        buildPricingSummaryLine(pricingSignals);
     }
 
     res.json({
@@ -358,6 +487,7 @@ competitorsRouter.get("/:id/report", async (req, res, next) => {
       recentChanges,
       topKeywords,
       positioningSummary,
+      pricingSignals,
     });
   } catch (err) {
     next(err);

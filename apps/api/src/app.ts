@@ -80,6 +80,32 @@ import { leadPromotionRouter } from "./routes/leadPromotion.js";
 import { growthAdvisorRouter } from "./routes/growthAdvisor.js";
 import { publicGrowthRouter } from "./routes/publicGrowth.js";
 import { internalGrowthRouter } from "./routes/internalGrowth.js";
+import { publicAnalyticsRouter } from "./routes/publicAnalytics.js";
+import { siteAnalyticsRouter } from "./routes/siteAnalytics.js";
+import { leadMagnetUploadsRouter } from "./routes/leadMagnetUploads.js";
+import { publicLeadMagnetDownloadRouter } from "./routes/publicLeadMagnetDownload.js";
+import { customDomainsRouter } from "./routes/customDomains.js";
+import { billingRouter } from "./routes/billing.js";
+import { billingWebhooksRouter } from "./routes/billingWebhooks.js";
+import { aiSalesAssistantRouter } from "./routes/aiSalesAssistant.js";
+import { icpRefinementRouter } from "./routes/icpRefinement.js";
+import { revenueIntelligenceRouter } from "./routes/revenueIntelligence.js";
+import { seoCampaignsRouter } from "./routes/seoCampaigns.js";
+import { visitorRevenueAttributionRouter } from "./routes/visitorRevenueAttribution.js";
+// Open-source-inspired upgrade round (12 parallel workstreams — see
+// docs/OPEN_SOURCE_INTEGRATION_MATRIX.md and docs/OPEN_SOURCE_IMPLEMENTATION_REPORT.md).
+import { agentPlatformRouter } from "./routes/agentPlatform.js";
+import { workflowAutomationRouter } from "./routes/workflowAutomation.js";
+import { growthExperimentsAnalyticsRouter } from "./routes/growthExperimentsAnalytics.js";
+import { growthExperimentsRouter } from "./routes/growthExperiments.js";
+import { publicExperimentsRouter } from "./routes/publicExperiments.js";
+import { surveysRouter } from "./routes/surveys.js";
+import { publicSurveysRouter } from "./routes/publicSurveys.js";
+import { websiteIntelligenceRouter } from "./routes/websiteIntelligence.js";
+import { customerIntelligenceRouter } from "./routes/customerIntelligence.js";
+import { salesIntelligenceResearchRouter } from "./routes/salesIntelligenceResearch.js";
+import { salesEngagementIntelligenceRouter } from "./routes/salesEngagementIntelligence.js";
+import { socialCommunicationIntelligenceRouter } from "./routes/socialCommunicationIntelligence.js";
 
 export function createApp(): express.Express {
   const app = express();
@@ -131,8 +157,13 @@ export function createApp(): express.Express {
   // growthAnalyzer.ts, real lead ingestion, per-IP rate-limited). See
   // routes/publicGrowth.ts / routes/internalGrowth.ts.
   app.use("/api/v1/public", publicCors, publicGrowthRouter);
+  app.use("/api/v1/public", publicCors, publicAnalyticsRouter);
+  app.use("/api/v1/public", publicCors, publicLeadMagnetDownloadRouter);
+  app.use("/api/v1/public", publicCors, publicExperimentsRouter);
+  app.use("/api/v1/public", publicCors, publicSurveysRouter);
 
   app.use("/api/v1/webhooks/postiz", publicCors, postizWebhooksRouter);
+  app.use("/api/v1/webhooks/billing", publicCors, billingWebhooksRouter);
 
   // Chatwoot AgentBot webhook receiver — Chatwoot itself is the caller
   // (no user session/JWT), authenticated via its own HMAC request
@@ -256,6 +287,8 @@ export function createApp(): express.Express {
   // discovery extensions, chatbot, sales pipeline, growth/revenue analytics).
   app.use("/api/v1/tenants/:tenantId/projects/:projectId/growth-analyses", mainCors, growthAnalyzerRouter);
   app.use("/api/v1/tenants/:tenantId/projects/:projectId/landing-pages", mainCors, landingPagesRouter);
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/landing-pages", mainCors, leadMagnetUploadsRouter);
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/landing-pages", mainCors, customDomainsRouter);
   app.use("/api/v1/tenants/:tenantId/projects/:projectId/chatbot", mainCors, chatbotAdminRouter);
   app.use("/api/v1/tenants/:tenantId/projects/:projectId/deals", mainCors, dealHealthRouter);
   app.use("/api/v1/tenants/:tenantId/projects/:projectId/deals", mainCors, dealsRouter);
@@ -277,6 +310,13 @@ export function createApp(): express.Express {
   app.use("/api/v1/tenants/:tenantId/projects/:projectId/channel-performance", mainCors, channelPerformanceRouter);
   app.use("/api/v1/tenants/:tenantId/projects/:projectId/hunter", mainCors, hunterContactsRouter);
   app.use("/api/v1/tenants/:tenantId/projects/:projectId/growth-analytics", mainCors, growthAnalyticsRouter);
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/site-analytics", mainCors, siteAnalyticsRouter);
+  app.use(
+    "/api/v1/tenants/:tenantId/projects/:projectId/deals/:dealId/ai-assistant",
+    mainCors,
+    aiSalesAssistantRouter,
+  );
+  app.use("/api/v1/tenants/:tenantId/billing", mainCors, billingRouter);
   app.use(
     "/api/v1/tenants/:tenantId/projects/:projectId/campaign-attribution",
     mainCors,
@@ -289,6 +329,75 @@ export function createApp(): express.Express {
   // workspace tenant, so mounting it on the normal tenant-scoped path is
   // safe: it's just another tenant, RLS-isolated like any other.
   app.use("/api/v1/tenants/:tenantId/projects/:projectId/internal-growth", mainCors, internalGrowthRouter);
+  // Phase 4a: real conversion-rate-per-ICP-segment feedback loop over
+  // existing icp_match_scores/leads/deals — see lib/icpRefinement.ts.
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/icp-refinement", mainCors, icpRefinementRouter);
+  // Phase 7: per-campaign (outbound + prospecting) qualified-leads ->
+  // meetings -> deals won -> revenue -> CAC -> ROI rollup — see
+  // lib/revenueIntelligence.ts.
+  app.use(
+    "/api/v1/tenants/:tenantId/projects/:projectId/revenue-intelligence",
+    mainCors,
+    revenueIntelligenceRouter,
+  );
+  // Phase 5a: SEO campaigns (keyword-cluster-driven content tracking) +
+  // internal-linking recommendations — see lib/keywordClustering.ts,
+  // lib/internalLinking.ts, routes/seoCampaigns.ts.
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/seo-campaigns", mainCors, seoCampaignsRouter);
+  // Gap-analysis follow-up: real first-touch-channel -> visitor -> lead ->
+  // deal -> revenue rollup, the one hop further back than
+  // revenueIntelligenceRouter's per-campaign view — see
+  // lib/visitorRevenueAttribution.ts.
+  app.use(
+    "/api/v1/tenants/:tenantId/projects/:projectId/visitor-attribution",
+    mainCors,
+    visitorRevenueAttributionRouter,
+  );
+
+  // Open-source-inspired upgrade round (12 parallel workstreams — see
+  // docs/OPEN_SOURCE_INTEGRATION_MATRIX.md and docs/OPEN_SOURCE_IMPLEMENTATION_REPORT.md).
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/agents", mainCors, agentPlatformRouter);
+  app.use(
+    "/api/v1/tenants/:tenantId/projects/:projectId/workflow-automation",
+    mainCors,
+    workflowAutomationRouter,
+  );
+  app.use(
+    "/api/v1/tenants/:tenantId/projects/:projectId/advanced-analytics",
+    mainCors,
+    growthExperimentsAnalyticsRouter,
+  );
+  app.use(
+    "/api/v1/tenants/:tenantId/projects/:projectId/growth-experiments",
+    mainCors,
+    growthExperimentsRouter,
+  );
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/surveys", mainCors, surveysRouter);
+  app.use(
+    "/api/v1/tenants/:tenantId/projects/:projectId/website-intelligence",
+    mainCors,
+    websiteIntelligenceRouter,
+  );
+  app.use(
+    "/api/v1/tenants/:tenantId/projects/:projectId/leads/:leadId/unified-profile",
+    mainCors,
+    customerIntelligenceRouter,
+  );
+  app.use(
+    "/api/v1/tenants/:tenantId/projects/:projectId/companies/:companyId/intelligence",
+    mainCors,
+    salesIntelligenceResearchRouter,
+  );
+  app.use(
+    "/api/v1/tenants/:tenantId/projects/:projectId/sales-engagement-intelligence",
+    mainCors,
+    salesEngagementIntelligenceRouter,
+  );
+  app.use(
+    "/api/v1/tenants/:tenantId/projects/:projectId/social-communication-intelligence",
+    mainCors,
+    socialCommunicationIntelligenceRouter,
+  );
 
   app.use(notFoundHandler);
   app.use(errorHandler);

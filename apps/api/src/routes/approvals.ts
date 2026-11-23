@@ -5,6 +5,7 @@ import { requireTenantMembership } from "../middleware/tenant.js";
 import { requireRole, GTM_ROLES } from "../middleware/rbac.js";
 import { Errors } from "../lib/httpError.js";
 import { notify } from "../lib/notify.js";
+import { autoAssignLeadRoundRobin } from "../lib/leadPromotion.js";
 
 export const approvalsRouter = Router({ mergeParams: true });
 approvalsRouter.use(requireAuth, requireTenantMembership);
@@ -56,7 +57,7 @@ approvalsRouter.post("/:approvalId/decision", requireRole(...GTM_ROLES), async (
       `UPDATE approvals
        SET status = $3, reviewed_by = $4, decision_notes = $5, reviewed_at = now()
        WHERE id = $1 AND tenant_id = $2 AND status = 'pending'
-       RETURNING id, agent_execution_id, campaign_id, status, requested_by, reviewed_by, decision_notes, reviewed_at,
+       RETURNING id, agent_execution_id, campaign_id, growth_advisor_action_id, status, requested_by, reviewed_by, decision_notes, reviewed_at,
          (SELECT c.project_id FROM campaigns c WHERE c.id = campaign_id) AS campaign_project_id`,
       [approvalId, req.tenantId, body.decision, req.userId, body.notes ?? null],
     );
@@ -79,6 +80,45 @@ approvalsRouter.post("/:approvalId/decision", requireRole(...GTM_ROLES), async (
          WHERE id = $1 AND tenant_id = $2 AND status = 'pending_approval'`,
         [approval.campaign_id, req.tenantId, body.decision],
       );
+    }
+
+    // AI Growth Advisor's one approval-gated action: a prepared
+    // 'auto_assign_leads' growth_advisor_actions row. This is the only
+    // place that action is ever actually executed — never by the
+    // prepare-action endpoint itself (see routes/growthAdvisor.ts). Rejected
+    // just flips the action's status; approved re-runs the real, unchanged
+    // autoAssignLeadRoundRobin (lib/leadPromotion.ts) for each lead id the
+    // action recorded, and records exactly what happened per lead — never a
+    // fabricated "done".
+    if (approval.growth_advisor_action_id) {
+      const actionResult = await req.tenantDb!.query(
+        `SELECT id, tenant_id, project_id, recommendation_id, action_type, payload, status
+         FROM growth_advisor_actions WHERE id = $1 AND tenant_id = $2 AND status = 'pending_approval'`,
+        [approval.growth_advisor_action_id, req.tenantId],
+      );
+      const action = actionResult.rows[0];
+      if (action) {
+        if (body.decision === "approved") {
+          const leadIds: string[] = Array.isArray(action.payload?.leadIds) ? action.payload.leadIds : [];
+          const results: Array<{ leadId: string; created: boolean; skippedReason?: string }> = [];
+          for (const leadId of leadIds) {
+            const assignment = await autoAssignLeadRoundRobin(
+              req.tenantDb!,
+              req.tenantId as string,
+              action.project_id,
+              leadId,
+              req.userId as string,
+            );
+            results.push({ leadId, created: assignment.created, skippedReason: assignment.skippedReason });
+          }
+          await req.tenantDb!.query(
+            `UPDATE growth_advisor_actions SET status = 'approved', result = $2::jsonb WHERE id = $1`,
+            [action.id, JSON.stringify({ results })],
+          );
+        } else {
+          await req.tenantDb!.query(`UPDATE growth_advisor_actions SET status = 'rejected' WHERE id = $1`, [action.id]);
+        }
+      }
     }
 
     await req.tenantDb!.query(

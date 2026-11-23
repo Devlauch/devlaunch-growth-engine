@@ -1,4 +1,20 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+
+// SSRF guard (../src/lib/ssrfGuard.js) does real DNS resolution + a pinned
+// http/https connection by design (see
+// docs/SECURITY_HARDENING_MILESTONE_1.md) — neutralize it here so these
+// tests keep using their injected fake fetch/backend against fictitious
+// ".test" domains instead of hitting a real network. Real DNS/rebinding/
+// private-IP behavior is covered for real in apps/api/test/ssrfGuard.test.ts
+// (this worker copy is intentionally identical logic).
+vi.mock("../src/lib/ssrfGuard.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/lib/ssrfGuard.js")>();
+  return {
+    ...actual,
+    assertSafeUrl: vi.fn(async () => {}),
+  };
+});
+
 import {
   classifyPageType,
   extractEmails,

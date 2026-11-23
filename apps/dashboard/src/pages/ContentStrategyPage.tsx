@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useNavigate } from "react-router-dom";
 import { Layout } from "../components/Layout";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorBanner } from "../components/ErrorBanner";
@@ -22,11 +22,23 @@ interface ContentCalendar {
   name: string;
   start_date: string;
   icp_profile_id: string | null;
+  seo_campaign_id: string | null;
   created_at: string;
+}
+
+// Local shape for apps/api/src/routes/seoCampaigns.ts — see
+// SeoAuditPage.tsx for the full SEO-campaign/keyword-cluster UI; this page
+// only needs enough to tag a calendar against one.
+interface SeoCampaignSummary {
+  id: string;
+  name: string;
+  status: "active" | "paused" | "completed";
 }
 
 type ContentType = "linkedin_post" | "blog" | "email";
 type ItemStatus = "draft" | "approved";
+
+type GenerationMethod = "template" | "llm";
 
 interface ContentCalendarItem {
   id: string;
@@ -35,6 +47,7 @@ interface ContentCalendarItem {
   title: string;
   body: string;
   status: ItemStatus;
+  generation_method: GenerationMethod;
 }
 
 type RepurposeFormat = "blog" | "linkedin_post" | "email" | "twitter_thread" | "summary";
@@ -94,18 +107,37 @@ function groupByWeek(items: ContentCalendarItem[]): { week: number; items: Conte
 
 export function ContentStrategyPage() {
   const { tenantId, projectId } = useParams<{ tenantId: string; projectId: string }>();
+  const navigate = useNavigate();
+
+  // Closes the "schema exists, no action surfaces it" gap: navigates to the
+  // Landing Page Builder with this content item pre-selected as its
+  // content_draft_id/content_calendar_item_id origin (see
+  // LandingPageBuilderPage.tsx's query-param prefill and
+  // apps/api/src/lib/contentAttribution.ts, which reads that link back).
+  function createLandingPageFrom(kind: "draft" | "calendar_item", id: string, title: string) {
+    if (!tenantId || !projectId) return;
+    const params = new URLSearchParams({ title });
+    params.set(kind === "draft" ? "contentDraftId" : "contentCalendarItemId", id);
+    navigate(`/tenants/${tenantId}/projects/${projectId}/landing-pages?${params.toString()}`);
+  }
 
   const [project, setProject] = useState<Project | null>(null);
   const [icpProfiles, setIcpProfiles] = useState<IcpProfileSummary[] | null>(null);
   const [calendars, setCalendars] = useState<ContentCalendar[] | null>(null);
+  const [campaigns, setCampaigns] = useState<SeoCampaignSummary[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   // Generate-calendar form
   const [calendarName, setCalendarName] = useState("30-day content calendar");
   const [startDate, setStartDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [icpProfileId, setIcpProfileId] = useState<string>("");
+  const [seoCampaignId, setSeoCampaignId] = useState<string>("");
+  const [enhanceBlogsWithLlm, setEnhanceBlogsWithLlm] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [generateError, setGenerateError] = useState<string | null>(null);
+  const [llmEnhancementNote, setLlmEnhancementNote] = useState<string | null>(null);
+  const [taggingCalendarId, setTaggingCalendarId] = useState<string | null>(null);
+  const [tagError, setTagError] = useState<string | null>(null);
 
   // Active calendar view
   const [activeCalendarId, setActiveCalendarId] = useState<string | null>(null);
@@ -127,16 +159,18 @@ export function ContentStrategyPage() {
   const load = useCallback(async () => {
     if (!tenantId || !projectId) return;
     try {
-      const [projectRes, icpRes, calendarsRes] = await Promise.all([
+      const [projectRes, icpRes, calendarsRes, campaignsRes] = await Promise.all([
         api.get<{ project: Project }>(`/tenants/${tenantId}/projects/${projectId}`),
         api.get<{ icpProfiles: IcpProfileSummary[] }>(`/tenants/${tenantId}/projects/${projectId}/icp-profiles`),
         api.get<{ contentCalendars: ContentCalendar[] }>(
           `/tenants/${tenantId}/projects/${projectId}/content-calendars`,
         ),
+        api.get<{ campaigns: SeoCampaignSummary[] }>(`/tenants/${tenantId}/projects/${projectId}/seo-campaigns`),
       ]);
       setProject(projectRes.project);
       setIcpProfiles(icpRes.icpProfiles);
       setCalendars(calendarsRes.contentCalendars);
+      setCampaigns(campaignsRes.campaigns);
     } catch (err) {
       setLoadError(err instanceof ApiError ? err.message : "Could not load content strategy for this project.");
     }
@@ -173,16 +207,36 @@ export function ContentStrategyPage() {
     e.preventDefault();
     if (!tenantId || !projectId) return;
     setGenerateError(null);
+    setLlmEnhancementNote(null);
     setGenerating(true);
     try {
-      const res = await api.post<{ contentCalendar: ContentCalendar; items: ContentCalendarItem[] }>(
-        `/tenants/${tenantId}/projects/${projectId}/content-calendars`,
-        { name: calendarName, startDate, icpProfileId: icpProfileId || undefined },
-      );
+      const res = await api.post<{
+        contentCalendar: ContentCalendar;
+        items: ContentCalendarItem[];
+        llmEnhancement?: { requested: boolean; enhancedCount: number; lastStatus: string | null };
+      }>(`/tenants/${tenantId}/projects/${projectId}/content-calendars`, {
+        name: calendarName,
+        startDate,
+        icpProfileId: icpProfileId || undefined,
+        seoCampaignId: seoCampaignId || undefined,
+        enhanceBlogsWithLlm,
+      });
       setCalendars((prev) => [res.contentCalendar, ...(prev ?? [])]);
       setActiveCalendarId(res.contentCalendar.id);
       setActiveCalendar(res.contentCalendar);
       setItems(res.items);
+      if (res.llmEnhancement?.requested) {
+        const { enhancedCount, lastStatus } = res.llmEnhancement;
+        setLlmEnhancementNote(
+          enhancedCount > 0
+            ? `${enhancedCount} blog item(s) were genuinely enhanced by a real LLM call.`
+            : lastStatus === "not_configured"
+              ? "LLM enhancement was requested, but no ANTHROPIC_API_KEY is configured — blog items kept their deterministic template bodies."
+              : lastStatus === "budget_exceeded"
+                ? "LLM enhancement was requested, but this tenant's monthly LLM token budget is already used up — blog items kept their deterministic template bodies."
+                : "LLM enhancement was requested, but the call didn't succeed — blog items kept their deterministic template bodies.",
+        );
+      }
     } catch (err) {
       setGenerateError(
         err instanceof ApiError ? err.message : "Could not generate a content calendar for this project.",
@@ -223,6 +277,24 @@ export function ContentStrategyPage() {
       setItemError(err instanceof ApiError ? err.message : "Could not save this content piece.");
     } finally {
       setSavingItemId(null);
+    }
+  }
+
+  async function handleTagCalendar(calendarId: string, campaignId: string) {
+    if (!tenantId || !projectId) return;
+    setTagError(null);
+    setTaggingCalendarId(calendarId);
+    try {
+      const res = await api.patch<{ contentCalendar: ContentCalendar }>(
+        `/tenants/${tenantId}/projects/${projectId}/content-calendars/${calendarId}`,
+        { seoCampaignId: campaignId || null },
+      );
+      setCalendars((prev) => (prev ? prev.map((c) => (c.id === calendarId ? res.contentCalendar : c)) : prev));
+      if (activeCalendar?.id === calendarId) setActiveCalendar(res.contentCalendar);
+    } catch (err) {
+      setTagError(err instanceof ApiError ? err.message : "Could not tag this calendar to a campaign.");
+    } finally {
+      setTaggingCalendarId(null);
     }
   }
 
@@ -271,12 +343,16 @@ export function ContentStrategyPage() {
         <h1>Content Strategy</h1>
         <p className="callout">
           Generates a real 30-day content calendar (LinkedIn posts, blogs, emails) from this project's own profile
-          (value proposition + industry) and, optionally, one ICP's real pain points — no LLM call, deterministic
-          templating grounded in your project's actual data. Nothing here is placeholder text.
+          (value proposition + industry) and, optionally, one ICP's real pain points — deterministic templating
+          grounded in your project's actual data, by default with no LLM call. Nothing here is placeholder text.
+          Optionally, you can ask a real LLM to polish each blog item's body below; it's only ever used when an
+          ANTHROPIC_API_KEY is actually configured for this environment and your tenant's monthly LLM token budget
+          isn't exceeded — otherwise it's an honest no-op and the deterministic template body is kept.
         </p>
 
         <form className="form" onSubmit={handleGenerate}>
           <ErrorBanner message={generateError} />
+          {llmEnhancementNote ? <p className="callout">{llmEnhancementNote}</p> : null}
           <label className="field">
             <span>Calendar name</span>
             <input required value={calendarName} onChange={(e) => setCalendarName(e.target.value)} />
@@ -296,6 +372,25 @@ export function ContentStrategyPage() {
                 </option>
               ))}
             </select>
+          </label>
+          <label className="field">
+            <span>SEO campaign (optional)</span>
+            <select value={seoCampaignId} onChange={(e) => setSeoCampaignId(e.target.value)}>
+              <option value="">No SEO campaign</option>
+              {(campaigns ?? []).map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name} ({c.status})
+                </option>
+              ))}
+            </select>
+          </label>
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <input
+              type="checkbox"
+              checked={enhanceBlogsWithLlm}
+              onChange={(e) => setEnhanceBlogsWithLlm(e.target.checked)}
+            />
+            Enhance blog articles with a real LLM call (opt-in; honest no-op if no LLM is configured)
           </label>
           <div className="form-actions">
             <button type="submit" className="btn btn-primary" disabled={generating}>
@@ -318,7 +413,25 @@ export function ContentStrategyPage() {
                 <div>
                   <strong>{c.name}</strong>
                   <span className="muted"> · starts {c.start_date}</span>
+                  {c.seo_campaign_id ? (
+                    <span className="muted">
+                      {" "}
+                      · campaign: {campaigns?.find((camp) => camp.id === c.seo_campaign_id)?.name ?? c.seo_campaign_id}
+                    </span>
+                  ) : null}
                 </div>
+                <select
+                  value={c.seo_campaign_id ?? ""}
+                  disabled={taggingCalendarId === c.id}
+                  onChange={(e) => handleTagCalendar(c.id, e.target.value)}
+                >
+                  <option value="">No SEO campaign</option>
+                  {(campaigns ?? []).map((camp) => (
+                    <option key={camp.id} value={camp.id}>
+                      {camp.name}
+                    </option>
+                  ))}
+                </select>
                 <button type="button" className="btn btn-secondary btn-small" onClick={() => setActiveCalendarId(c.id)}>
                   {activeCalendarId === c.id ? "Viewing" : "View"}
                 </button>
@@ -326,6 +439,7 @@ export function ContentStrategyPage() {
             ))}
           </ul>
         )}
+        <ErrorBanner message={tagError} />
       </section>
 
       {activeCalendar ? (
@@ -348,6 +462,11 @@ export function ContentStrategyPage() {
                         <Badge tone={contentTypeTone(item.content_type)}>{CONTENT_TYPE_LABELS[item.content_type]}</Badge>
                         <span className="muted">Day {item.day_offset + 1}</span>
                         <Badge tone={item.status === "approved" ? "success" : "neutral"}>{item.status}</Badge>
+                        {item.content_type === "blog" ? (
+                          <Badge tone={item.generation_method === "llm" ? "info" : "neutral"}>
+                            {item.generation_method === "llm" ? "LLM-enhanced" : "Template-generated"}
+                          </Badge>
+                        ) : null}
                       </div>
                       <input
                         value={titleFor(item)}
@@ -376,6 +495,13 @@ export function ContentStrategyPage() {
                           onClick={() => saveItem(item, { status: item.status === "approved" ? "draft" : "approved" })}
                         >
                           {item.status === "approved" ? "Unapprove" : "Approve"}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-small"
+                          onClick={() => createLandingPageFrom("calendar_item", item.id, titleFor(item))}
+                        >
+                          Create landing page from this
                         </button>
                       </div>
                     </li>
@@ -441,6 +567,13 @@ export function ContentStrategyPage() {
                 <h4>{piece.title}</h4>
                 <p style={{ whiteSpace: "pre-wrap" }}>{piece.body}</p>
                 {piece.brand_voice_note ? <p className="muted">{piece.brand_voice_note}</p> : null}
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-small"
+                  onClick={() => createLandingPageFrom("draft", piece.id, piece.title)}
+                >
+                  Create landing page from this
+                </button>
               </div>
             ))}
           </div>

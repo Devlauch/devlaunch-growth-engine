@@ -9,6 +9,21 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 // this stage's own client-homepage fetch make, following the same
 // convention those route tests use.
 
+// SSRF guard (../src/lib/ssrfGuard.js) does real DNS resolution + a pinned
+// http/https connection by design (see docs/SECURITY_HARDENING_MILESTONE_1.md)
+// — neutralize it here so this stays intercepted at the global-`fetch` layer
+// as above, instead of hitting a real network for fictitious "comp1.com"-
+// style test domains. Real DNS/rebinding/private-IP behavior is covered for
+// real in test/ssrfGuard.test.ts.
+vi.mock("../src/lib/ssrfGuard.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/lib/ssrfGuard.js")>();
+  return {
+    ...actual,
+    assertSafeUrl: vi.fn(async () => {}),
+    safeFetch: vi.fn((url: string, init?: unknown) => (globalThis.fetch as typeof fetch)(url, init as RequestInit)),
+  };
+});
+
 const { runResearchStage } = await import("../src/workflow/stages/research.js");
 
 type FakeDbRow = Record<string, unknown>;

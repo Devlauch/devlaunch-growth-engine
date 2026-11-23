@@ -234,6 +234,14 @@ export function Layout({ children, crumbs, tenantName, projectName, hasLeads = t
               >
                 Plan &amp; Usage
               </NavLink>
+              <NavLink
+                to={`/tenants/${tenantId}/billing`}
+                active={location.pathname === `/tenants/${tenantId}/billing`}
+                icon={<IconChart />}
+                onClick={closeMobileNav}
+              >
+                Billing
+              </NavLink>
 
               {projectId ? (
                 <>
@@ -253,6 +261,16 @@ export function Layout({ children, crumbs, tenantName, projectName, hasLeads = t
                     onClick={closeMobileNav}
                   >
                     Discovery
+                  </NavLink>
+                  <NavLink
+                    to={`/tenants/${tenantId}/projects/${projectId}/prospecting-campaigns`}
+                    active={location.pathname.startsWith(
+                      `/tenants/${tenantId}/projects/${projectId}/prospecting-campaigns`,
+                    )}
+                    icon={<IconCompass />}
+                    onClick={closeMobileNav}
+                  >
+                    Prospecting Campaigns
                   </NavLink>
                   <NavLink
                     to={`/tenants/${tenantId}/projects/${projectId}/priority-queue`}
@@ -287,6 +305,30 @@ export function Layout({ children, crumbs, tenantName, projectName, hasLeads = t
                     Workflows
                   </NavLink>
                   <NavLink
+                    to={`/tenants/${tenantId}/projects/${projectId}/sales-pipeline`}
+                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/sales-pipeline`)}
+                    icon={<IconTarget />}
+                    onClick={closeMobileNav}
+                  >
+                    Sales Pipeline
+                  </NavLink>
+                  <NavLink
+                    to={`/tenants/${tenantId}/projects/${projectId}/companies`}
+                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/companies`)}
+                    icon={<IconBuilding />}
+                    onClick={closeMobileNav}
+                  >
+                    Companies
+                  </NavLink>
+                  <NavLink
+                    to={`/tenants/${tenantId}/projects/${projectId}/crm-dashboard`}
+                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/crm-dashboard`)}
+                    icon={<IconChart />}
+                    onClick={closeMobileNav}
+                  >
+                    CRM Dashboard
+                  </NavLink>
+                  <NavLink
                     to={`/tenants/${tenantId}/projects/${projectId}/analytics`}
                     active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/analytics`)}
                     icon={<IconChart />}
@@ -309,6 +351,177 @@ export function Layout({ children, crumbs, tenantName, projectName, hasLeads = t
                     onClick={closeMobileNav}
                   >
                     Integrations
+                  </NavLink>
+                  <NavLink
+                    to={`/tenants/${tenantId}/projects/${projectId}/integrations/listmonk`}
+                    active={location.pathname.startsWith(
+                      `/tenants/${tenantId}/projects/${projectId}/integrations/listmonk`,
+                    )}
+                    icon={<IconPlug />}
+                    onClick={closeMobileNav}
+                  >
+                    Listmonk (email)
+                  </NavLink>
+                  <NavLink
+                    to={`/tenants/${tenantId}/projects/${projectId}/integrations/chatwoot`}
+                    active={location.pathname.startsWith(
+                      `/tenants/${tenantId}/projects/${projectId}/integrations/chatwoot`,
+                    )}
+                    icon={<IconPlug />}
+                    onClick={closeMobileNav}
+                  >
+                    Chatwoot (live chat)
+                  </NavLink>
+                  <NavLink
+                    to={`/tenants/${tenantId}/projects/${projectId}/integrations/postiz`}
+                    active={location.pathname.startsWith(
+                      `/tenants/${tenantId}/projects/${projectId}/integrations/postiz`,
+                    )}
+                    icon={<IconPlug />}
+                    onClick={closeMobileNav}
+                  >
+                    Postiz (social)
+                  </NavLink>
+                  <span className="nav-section-label">Growth Engine</span>
+                  <NavLink
+                    to={`/tenants/${tenantId}/projects/${projectId}/growth-analyzer`}
+                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/growth-analyzer`)}
+                    icon={<IconZap />}
+                    onClick={closeMobileNav}
+                  >
+                    Growth Analyzer
+                  </NavLink>
+                  <NavLink
+                    to={`/tenants/${tenantId}/projects/${projectId}/landing-pages`}
+                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/landing-pages`)}
+                    icon={<IconLayers />}
+                    onClick={closeMobileNav}
+                  >
+                    Landing Pages
+                  </NavLink>
+                  <NavLink
+                    to={`/tenants/${tenantId}/projects/${projectId}/chatbot`}
+                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/chatbot`)}
+                    icon={<IconBell />}
+                    onClick={closeMobileNav}
+                  >
+                    AI Chatbot
+                  </NavLink>
+                  <NavLink
+                    to={`/tenants/${tenantId}/projects/${projectId}/growth-analytics`}
+                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/growth-analytics`)}
+                    icon={<IconChart />}
+                    onClick={closeMobileNav}
+                  >
+                    Growth Analytics
+                  </NavLink>
+                  <NavLink
+                    to={`/tenants/${tenantId}/projects/${projectId}/site-analytics`}
+                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/site-analytics`)}
+                    icon={<IconChart />}
+                    onClick={closeMobileNav}
+                  >
+                    Site Analytics
+                  </NavLink>
+                  <NavLink
+                    to={`/tenants/${tenantId}/projects/${projectId}/growth-advisor`}
+                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/growth-advisor`)}
+                    icon={<IconBell />}
+                    onClick={closeMobileNav}
+                  >
+                    Growth Advisor
+                  </NavLink>
+                  <NavLink
+                    to={`/tenants/${tenantId}/projects/${projectId}/internal-growth`}
+                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/internal-growth`)}
+                    icon={<IconTarget />}
+                    onClick={closeMobileNav}
+                  >
+                    DevLaunch Acquisition
+                  </NavLink>
+                  <NavLink
+                    to={`/tenants/${tenantId}/projects/${projectId}/revenue-intelligence`}
+                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/revenue-intelligence`)}
+                    icon={<IconChart />}
+                    onClick={closeMobileNav}
+                  >
+                    Revenue Intelligence
+                  </NavLink>
+                  <NavLink
+                    to={`/tenants/${tenantId}/projects/${projectId}/visitor-attribution`}
+                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/visitor-attribution`)}
+                    icon={<IconChart />}
+                    onClick={closeMobileNav}
+                  >
+                    Visitor Attribution
+                  </NavLink>
+                  <NavLink
+                    to={`/tenants/${tenantId}/projects/${projectId}/agents`}
+                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/agents`)}
+                    icon={<IconChart />}
+                    onClick={closeMobileNav}
+                  >
+                    AI Agent Center
+                  </NavLink>
+                  <NavLink
+                    to={`/tenants/${tenantId}/projects/${projectId}/workflow-automation`}
+                    active={location.pathname.startsWith(
+                      `/tenants/${tenantId}/projects/${projectId}/workflow-automation`,
+                    )}
+                    icon={<IconChart />}
+                    onClick={closeMobileNav}
+                  >
+                    Workflow Automation
+                  </NavLink>
+                  <NavLink
+                    to={`/tenants/${tenantId}/projects/${projectId}/advanced-analytics`}
+                    active={location.pathname.startsWith(
+                      `/tenants/${tenantId}/projects/${projectId}/advanced-analytics`,
+                    )}
+                    icon={<IconChart />}
+                    onClick={closeMobileNav}
+                  >
+                    Advanced Analytics
+                  </NavLink>
+                  <NavLink
+                    to={`/tenants/${tenantId}/projects/${projectId}/growth-experiments`}
+                    active={location.pathname.startsWith(
+                      `/tenants/${tenantId}/projects/${projectId}/growth-experiments`,
+                    )}
+                    icon={<IconChart />}
+                    onClick={closeMobileNav}
+                  >
+                    Growth Experiments
+                  </NavLink>
+                  <NavLink
+                    to={`/tenants/${tenantId}/projects/${projectId}/feedback-surveys`}
+                    active={location.pathname.startsWith(
+                      `/tenants/${tenantId}/projects/${projectId}/feedback-surveys`,
+                    )}
+                    icon={<IconInbox />}
+                    onClick={closeMobileNav}
+                  >
+                    Feedback &amp; Surveys
+                  </NavLink>
+                  <NavLink
+                    to={`/tenants/${tenantId}/projects/${projectId}/competitor-monitoring`}
+                    active={location.pathname.startsWith(
+                      `/tenants/${tenantId}/projects/${projectId}/competitor-monitoring`,
+                    )}
+                    icon={<IconChart />}
+                    onClick={closeMobileNav}
+                  >
+                    Competitor Monitoring
+                  </NavLink>
+                  <NavLink
+                    to={`/tenants/${tenantId}/projects/${projectId}/social-content-calendar`}
+                    active={location.pathname.startsWith(
+                      `/tenants/${tenantId}/projects/${projectId}/social-content-calendar`,
+                    )}
+                    icon={<IconInbox />}
+                    onClick={closeMobileNav}
+                  >
+                    Social Content Calendar
                   </NavLink>
                   <span className="nav-section-label">Marketing Intelligence</span>
                   <NavLink

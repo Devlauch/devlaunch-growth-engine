@@ -252,6 +252,45 @@ describe("POST /content-calendars", () => {
 
     expect(res.status).toBe(400);
   });
+
+  it("enhanceBlogsWithLlm: true is an honest no-op (every item stays generation_method: 'template') when no ANTHROPIC_API_KEY is configured — the real env.ts, not mocked", async () => {
+    const app = buildApp();
+    const items = generateContentCalendar(SAAS_PROFILE, null, "2026-11-01");
+
+    queueResponses([
+      ...mockMembership(),
+      { rowCount: 1, rows: [{}] }, // project exists
+      { rowCount: 1, rows: [SAAS_PROFILE] }, // project_profiles
+      {
+        rowCount: 1,
+        rows: [{ id: CALENDAR_1, tenant_id: TENANT_A, project_id: PROJECT_1, name: "November calendar", start_date: "2026-11-01", icp_profile_id: null }],
+      }, // INSERT content_calendars
+      // Each item insert: the route must pass generation_method: 'template'
+      // for every item (no LLM configured, so enhanceBlogBodyWithLlm() is
+      // an honest not_configured no-op) — echoed back here as the mock's
+      // "stored" row.
+      ...items.map((item, i) => ({ rowCount: 1, rows: [{ id: `item-${i}`, ...item, generation_method: "template" }] })),
+    ]);
+
+    const res = await request(app)
+      .post(`/api/v1/tenants/${TENANT_A}/projects/${PROJECT_1}/content-calendars`)
+      .set("X-Dev-User-Id", USER_1)
+      .send({ name: "November calendar", startDate: "2026-11-01", enhanceBlogsWithLlm: true });
+
+    expect(res.status).toBe(201);
+    expect(res.body.items.every((i: { generation_method: string }) => i.generation_method === "template")).toBe(true);
+    expect(res.body.llmEnhancement).toEqual({ requested: true, enhancedCount: 0, lastStatus: "not_configured" });
+
+    // The actual INSERT calls for content_calendar_items must have been
+    // given 'template' as the generation_method parameter for every blog
+    // item, proving the route never silently claims an LLM produced it.
+    const itemInsertCalls = queryMock.mock.calls.filter(([sql]) => String(sql).includes("INSERT INTO content_calendar_items"));
+    expect(itemInsertCalls.length).toBe(items.length);
+    for (const call of itemInsertCalls) {
+      const params = call[1] as unknown[];
+      expect(params[params.length - 1]).toBe("template");
+    }
+  });
 });
 
 describe("GET /content-calendars/:id", () => {

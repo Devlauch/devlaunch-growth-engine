@@ -28,6 +28,9 @@
  */
 
 import { recommendNextActions } from "./nextBestAction.js";
+import { getLlmProvider } from "./llmProvider.js";
+import { isLlmBudgetExceeded, recordLlmUsage } from "./llmBudget.js";
+import { logger } from "./logger.js";
 
 export type MarketingQaHandler = (
   tenantDb: import("pg").PoolClient,
@@ -236,12 +239,29 @@ function buildFallbackAnswer(): string {
 export interface AnswerQuestionResult {
   matchedIntent: string | null;
   answer: string;
+  /**
+   * Milestone 5 (P4): an OPTIONAL, LLM-generated natural-language
+   * elaboration of `answer`, never a replacement for it. `null` whenever no
+   * LLM is configured (every environment this codebase has actually run in
+   * today — see llmProvider.ts), the tenant's monthly LLM token budget is
+   * already exceeded (llmBudget.ts), or the LLM call itself fails for any
+   * reason — this field degrading to null never changes `answer` or
+   * `matchedIntent`, which are always the same deterministic values
+   * computed below with no LLM configured at all.
+   */
+  llmExplanation: string | null;
 }
 
 /**
  * Tries each intent in INTENTS, in order, against `question`. First match
  * wins and its handler runs a real query/computation. No match returns the
  * honest fallback (never a fabricated/generic answer).
+ *
+ * Deterministic-fallback-first: the matchedIntent/answer computed below are
+ * IDENTICAL, byte-for-byte, to what this function returned before the LLM
+ * enhancement seam was added — the optional `llmExplanation` step below
+ * only ever adds information on top, after the deterministic answer is
+ * already final, and can never change it.
  */
 export async function answerQuestion(
   tenantDb: import("pg").PoolClient,
@@ -251,15 +271,55 @@ export async function answerQuestion(
 ): Promise<AnswerQuestionResult> {
   const normalized = (question ?? "").trim();
   if (normalized.length === 0) {
-    return { matchedIntent: null, answer: buildFallbackAnswer() };
+    return { matchedIntent: null, answer: buildFallbackAnswer(), llmExplanation: null };
   }
 
   for (const candidate of INTENTS) {
     if (candidate.patterns.some((pattern) => pattern.test(normalized))) {
       const answer = await candidate.handler(tenantDb, tenantId, projectId, normalized);
-      return { matchedIntent: candidate.intent, answer };
+      const llmExplanation = await tryLlmExplanation(tenantDb, tenantId, projectId, normalized, answer);
+      return { matchedIntent: candidate.intent, answer, llmExplanation };
     }
   }
 
-  return { matchedIntent: null, answer: buildFallbackAnswer() };
+  return { matchedIntent: null, answer: buildFallbackAnswer(), llmExplanation: null };
+}
+
+/**
+ * Milestone 5 (P4) enhancement seam: when an LLM is configured and this
+ * tenant's monthly token budget isn't already exceeded, asks it for a
+ * short, friendlier natural-language elaboration of the ALREADY-COMPUTED
+ * deterministic `answer` — grounded only in that answer text (the prompt
+ * does not ask the LLM to compute or invent any new number). Returns `null`
+ * on any failure (not configured, budget exceeded, network/API error) —
+ * never throws, so `answerQuestion`'s deterministic result is always
+ * returned regardless of what happens here.
+ */
+async function tryLlmExplanation(
+  tenantDb: import("pg").PoolClient,
+  tenantId: string,
+  projectId: string,
+  question: string,
+  deterministicAnswer: string,
+): Promise<string | null> {
+  const provider = getLlmProvider();
+  if (!provider.isConfigured) return null;
+
+  try {
+    if (await isLlmBudgetExceeded(tenantDb, tenantId)) return null;
+
+    const result = await provider.complete(
+      `A user asked this marketing-analytics question: "${question}"\n\n` +
+        `The exact, already-computed, factual answer is: "${deterministicAnswer}"\n\n` +
+        `In one or two short sentences, restate this answer in a friendlier, more conversational tone. ` +
+        `Do not add any new numbers, facts, or claims beyond what is stated above.`,
+      { maxTokens: 150, systemPrompt: "You rephrase a given factual answer conversationally. Never invent new facts or numbers." },
+    );
+    await recordLlmUsage(tenantDb, tenantId, projectId, result, { feature: "marketing_qa_explanation" });
+    const text = result.text.trim();
+    return text.length > 0 ? text : null;
+  } catch (err) {
+    logger.warn({ err, tenantId, projectId }, "marketingQa: LLM explanation call failed, falling back to deterministic answer only");
+    return null;
+  }
 }

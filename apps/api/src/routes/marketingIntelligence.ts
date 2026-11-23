@@ -48,7 +48,12 @@ marketingIntelligenceRouter.post("/ask", async (req, res, next) => {
     await loadProjectOr404(req.tenantDb!, req.tenantId!, projectId);
     const body = askSchema.parse(req.body);
 
-    const { matchedIntent, answer } = await answerQuestion(req.tenantDb!, req.tenantId!, projectId, body.question);
+    const { matchedIntent, answer, llmExplanation } = await answerQuestion(
+      req.tenantDb!,
+      req.tenantId!,
+      projectId,
+      body.question,
+    );
 
     // Logged regardless of match/no-match — an honest audit trail of every
     // question asked, matched or not.
@@ -58,7 +63,7 @@ marketingIntelligenceRouter.post("/ask", async (req, res, next) => {
       [req.tenantId, projectId, req.userId ?? null, body.question, matchedIntent, answer],
     );
 
-    res.status(200).json({ matchedIntent, answer });
+    res.status(200).json({ matchedIntent, answer, llmExplanation });
   } catch (err) {
     next(err);
   }

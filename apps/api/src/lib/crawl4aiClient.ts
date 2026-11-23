@@ -18,10 +18,24 @@
  * service can't be reached or errors at the transport/service level —
  * never silently returns fabricated/empty page content standing in for a
  * real crawl.
+ *
+ * SSRF guard: the actual `fetch()` call below targets the operator-configured
+ * `CRAWL4AI_BASE_URL`, not the caller-supplied `url` — but that `url` is the
+ * real SSRF-relevant value, since it's what the (trusted) Crawl4AI service
+ * will itself fetch on our behalf. `assertSafeUrl()` (../lib/ssrfGuard.ts)
+ * validates it — DNS A/AAAA resolution + private/loopback/link-local/
+ * metadata-range rejection — before it's ever sent, so this client can't be
+ * used as an SSRF proxy against Crawl4AI's own network reachability.
  */
+import { assertSafeUrl } from "./ssrfGuard.js";
 
 /** A conservative, fixed, small set of paths probed on a competitor's own site. */
 export const COMPETITOR_CANDIDATE_PATHS: string[] = ["/", "/about", "/pricing", "/blog"];
+
+/** Hardening: a single crawl4ai `/crawl` call has no other timeout in this
+ * call chain — a hung Crawl4AI service/target page would otherwise tie up
+ * the request indefinitely. */
+const CRAWL4AI_FETCH_TIMEOUT_MS = 20_000;
 
 export class Crawl4AINotConfiguredError extends Error {
   constructor() {
@@ -79,6 +93,9 @@ export async function fetchCompetitorPage(
   if (!baseUrl) {
     throw new Crawl4AINotConfiguredError();
   }
+  // SSRF guard — see file doc comment. Throws SsrfBlockedError before any
+  // network call is made if `url` resolves to a private/internal address.
+  await assertSafeUrl(url);
   const apiToken = opts.apiToken ?? process.env.CRAWL4AI_API_TOKEN;
   const fetchImpl = opts.fetchImpl ?? fetch;
 
@@ -90,6 +107,10 @@ export async function fetchCompetitorPage(
       method: "POST",
       headers,
       body: JSON.stringify({ urls: [url] }),
+      // Hardening: a crawl request has no timeout anywhere else in this
+      // call chain — without this, a hung Crawl4AI service/page could tie
+      // up a request indefinitely.
+      signal: AbortSignal.timeout(CRAWL4AI_FETCH_TIMEOUT_MS),
     });
   } catch (err) {
     throw new Crawl4AIUnreachableError(baseUrl, err);
