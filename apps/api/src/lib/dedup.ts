@@ -374,19 +374,6 @@ export function normalizeContactName(input: string | null | undefined): string {
 }
 
 /**
- * Normalizes a person's name for fuzzy-ish exact matching: lowercase, trim,
- * collapse internal whitespace. Mirrors normalizeOrgName/normalizeDomain's
- * normalize-before-compare approach — a contact name has no dedicated
- * `normalized_name` column (unlike discovered_organizations.normalized_name
- * or discovered_contacts.normalized_email), so this is applied at query time
- * on both sides of the comparison instead.
- */
-export function normalizeContactName(input: string | null | undefined): string {
-  if (!input || typeof input !== "string") return "";
-  return input.trim().toLowerCase().replace(/\s+/g, " ");
-}
-
-/**
  * Looks for an existing discovered_contacts row matching the given email
  * (exact, normalized) or name within the same organization. Email match is
  * checked first; name is a fallback for sources without an email.

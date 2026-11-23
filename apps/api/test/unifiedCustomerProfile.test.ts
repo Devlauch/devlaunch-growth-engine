@@ -233,11 +233,31 @@ describe("getUnifiedTimeline (mocked pg client)", () => {
 
   it("merges CRM, site, and conversation events into one newest-first timeline", async () => {
     const tenantDb = makeTenantDb([
-      // --- getLeadActivityTimeline's own 7 parallel queries (Promise.all order) ---
+      // getLeadActivityTimeline's own lead-row read is a single `await`
+      // BEFORE its inner Promise.all, so — since buildCrmEvents calls
+      // getLeadActivityTimeline(...) as one of ITS OWN Promise.all
+      // elements, alongside its own meetingMeta/replyMeta queries — the
+      // real call order is: leadRow fires first (synchronously, as
+      // getLeadActivityTimeline starts), THEN buildCrmEvents' own
+      // meetingMeta/replyMeta queries fire (the next array elements,
+      // evaluated synchronously by the outer Promise.all), and only THEN,
+      // on the next microtask tick, does getLeadActivityTimeline's own
+      // inner Promise.all (assignments..scores) actually run.
+      { rowCount: 0, rows: [] }, // lead row (not found here — defense in depth, never throws)
+      { rowCount: 0, rows: [] }, // meetingMeta
+      { rowCount: 1, rows: [{ id: "reply-1", classification: "interested" }] }, // replyMeta
       { rowCount: 0, rows: [] }, // assignments
       {
         rowCount: 1,
-        rows: [{ id: "deal-1", stage: "proposal", value_amount: null, stage_changed_at: "2026-11-20T00:00:00Z" }],
+        rows: [
+          {
+            id: "deal-1",
+            stage: "proposal",
+            value_amount: null,
+            stage_changed_at: "2026-11-20T00:00:00Z",
+            created_at: "2026-11-18T00:00:00Z",
+          },
+        ],
       }, // deals
       { rowCount: 0, rows: [] }, // meetings
       { rowCount: 0, rows: [] }, // tasks
@@ -255,9 +275,7 @@ describe("getUnifiedTimeline (mocked pg client)", () => {
         ],
       }, // replies
       { rowCount: 0, rows: [] }, // auditEvents
-      // --- buildCrmEvents' own extra meeting/reply metadata queries ---
-      { rowCount: 0, rows: [] }, // meetingMeta
-      { rowCount: 1, rows: [{ id: "reply-1", classification: "interested" }] }, // replyMeta
+      { rowCount: 0, rows: [] }, // scores
       // --- buildSiteEvents ---
       { rowCount: 1, rows: [{ visitor_id: "visitor-abc" }] }, // leads.visitor_id lookup
       {
@@ -287,8 +305,14 @@ describe("getUnifiedTimeline (mocked pg client)", () => {
 
     const timeline = await getUnifiedTimeline(tenantDb, TENANT_ID, PROJECT_ID, LEAD_ID);
 
-    expect(timeline.length).toBe(5); // 1 deal + 1 reply + 1 session + 1 pageview + 1 chatbot conversation
-    expect(timeline.map((e) => e.channel).sort()).toEqual(["conversation", "crm", "crm", "site", "site"].sort());
+    // 1 deal stage_change + 1 deal_created (both ported from Phase 2's
+    // activityTimeline.ts additions — a deal now contributes two distinct
+    // items, see that file's header comment) + 1 reply + 1 session +
+    // 1 pageview + 1 chatbot conversation
+    expect(timeline.length).toBe(6);
+    expect(timeline.map((e) => e.channel).sort()).toEqual(
+      ["conversation", "crm", "crm", "crm", "site", "site"].sort(),
+    );
 
     // Newest-first
     const timestamps = timeline.map((e) => new Date(e.timestamp).getTime());
@@ -305,6 +329,7 @@ describe("getUnifiedTimeline (mocked pg client)", () => {
 
   it("skips the site-analytics queries entirely when the lead has no correlated visitor_id", async () => {
     const tenantDb = makeTenantDb([
+      { rowCount: 0, rows: [] }, // lead row (not found here — defense in depth, never throws)
       { rowCount: 0, rows: [] }, // assignments
       { rowCount: 0, rows: [] }, // deals
       { rowCount: 0, rows: [] }, // meetings
@@ -312,6 +337,7 @@ describe("getUnifiedTimeline (mocked pg client)", () => {
       { rowCount: 0, rows: [] }, // notes
       { rowCount: 0, rows: [] }, // replies
       { rowCount: 0, rows: [] }, // auditEvents
+      { rowCount: 0, rows: [] }, // scores
       { rowCount: 0, rows: [] }, // meetingMeta
       { rowCount: 0, rows: [] }, // replyMeta
       { rowCount: 1, rows: [{ visitor_id: null }] }, // leads.visitor_id lookup -> null
@@ -321,7 +347,7 @@ describe("getUnifiedTimeline (mocked pg client)", () => {
 
     const timeline = await getUnifiedTimeline(tenantDb, TENANT_ID, PROJECT_ID, LEAD_ID);
     expect(timeline).toEqual([]);
-    // Only 12 queries ran (no site_sessions/pageviews/events queries attempted).
-    expect(tenantDb.query).toHaveBeenCalledTimes(12);
+    // Only 14 queries ran (no site_sessions/pageviews/events queries attempted).
+    expect(tenantDb.query).toHaveBeenCalledTimes(14);
   });
 });

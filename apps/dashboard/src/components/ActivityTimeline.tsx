@@ -54,25 +54,6 @@ const TYPE_TONE: Record<ActivityItemType, "neutral" | "info" | "success" | "warn
   crm_task_created: "neutral",
 };
 
-// Reuses the existing tone-based badge classes (badge-neutral/info/
-// success/warn/danger, see styles.css) instead of inventing a second,
-// parallel per-type color scheme — the badge className below was
-// previously `badge-${item.type}`, for which no CSS rule has ever existed
-// on this tree (so every item rendered an uncolored, unstyled badge).
-const TYPE_TONE: Record<ActivityItemType, "neutral" | "info" | "success" | "warn" | "danger"> = {
-  assignment: "info",
-  stage_change: "warn",
-  meeting: "neutral",
-  task: "neutral",
-  note: "neutral",
-  reply: "info",
-  lead_created: "neutral",
-  discovery_sourced: "info",
-  lead_scored: "success",
-  deal_created: "warn",
-  crm_task_created: "neutral",
-};
-
 function formatTimestamp(ts: string): string {
   const d = new Date(ts);
   return Number.isNaN(d.getTime()) ? ts : d.toLocaleString();

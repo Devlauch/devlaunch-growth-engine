@@ -43,7 +43,9 @@ describe("summarizeDealForHandoff", () => {
     q.mockResolvedValueOnce({ rows: [{ max: null }] }); // note activity max
     q.mockResolvedValueOnce({ rows: [{ max: null }] }); // task activity max
     q.mockResolvedValueOnce({ rows: [{ avg_value: null, cnt: "0" }] }); // typical value
-    // 9-15: getLeadActivityTimeline's 7 queries
+    // 9: getLeadActivityTimeline's own lead-row read (before its inner Promise.all)
+    q.mockResolvedValueOnce({ rowCount: 0, rows: [] }); // lead row (not found here — defense in depth, never throws)
+    // 10-17: getLeadActivityTimeline's 8 Promise.all queries
     q.mockResolvedValueOnce({ rows: [] }); // assignments
     q.mockResolvedValueOnce({ rows: [] }); // deals
     q.mockResolvedValueOnce({ rows: [] }); // meetings
@@ -51,6 +53,7 @@ describe("summarizeDealForHandoff", () => {
     q.mockResolvedValueOnce({ rows: [] }); // notes
     q.mockResolvedValueOnce({ rows: [] }); // replies
     q.mockResolvedValueOnce({ rows: [] }); // audit events
+    q.mockResolvedValueOnce({ rows: [] }); // scores
 
     const summary = await summarizeDealForHandoff(client, TENANT_ID, PROJECT_ID, DEAL_ID);
 

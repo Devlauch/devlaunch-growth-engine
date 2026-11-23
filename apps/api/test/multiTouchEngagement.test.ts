@@ -26,6 +26,11 @@ const empty = { rowCount: 0, rows: [] };
 describe("getTouchpointHistory", () => {
   it("returns an empty list, never fabricating a touchpoint, when every source table is empty", async () => {
     queueResponses([
+      empty, // activityTimeline: lead row
+      empty, // sequence_enrollments
+      empty, // message_drafts
+      empty, // chatbot_conversations
+      empty, // site_events (getCorrelatedSiteEvents)
       empty, // activityTimeline: assignments
       empty, // deals
       empty, // meetings
@@ -33,10 +38,7 @@ describe("getTouchpointHistory", () => {
       empty, // notes
       empty, // replies
       empty, // audit_events
-      empty, // sequence_enrollments
-      empty, // message_drafts
-      empty, // chatbot_conversations
-      empty, // site_events (getCorrelatedSiteEvents)
+      empty, // scores
     ]);
 
     const touchpoints = await getTouchpointHistory(tenantDb as any, TENANT_A, PROJECT_1, LEAD_1);
@@ -45,19 +47,16 @@ describe("getTouchpointHistory", () => {
 
   it("unions real sequence enrollment, message draft, chatbot, meeting, and reply rows into one sorted history", async () => {
     queueResponses([
-      empty, // assignments
-      empty, // deals
-      {
-        rowCount: 1,
-        rows: [{ id: "m1", type: "demo", status: "completed", scheduled_at: "2026-11-10T00:00:00Z", outcome_notes: null, next_step: null }],
-      }, // meetings
-      empty, // tasks
-      empty, // notes
-      {
-        rowCount: 1,
-        rows: [{ id: "r1", channel: "email", classification: "interested", classification_confidence: "high", received_at: "2026-11-15T00:00:00Z" }],
-      }, // replies
-      empty, // audit_events
+      // getLeadActivityTimeline's own lead-row read is a single `await`
+      // BEFORE its inner Promise.all, so — since getTouchpointHistory calls
+      // getLeadActivityTimeline(...) as one of ITS OWN Promise.all elements,
+      // alongside its own enrollments/drafts/chatbot/siteEvents queries —
+      // the real call order is: leadRow fires first, THEN
+      // getTouchpointHistory's other queries (the next array elements,
+      // evaluated synchronously by the outer Promise.all), and only THEN,
+      // on the next microtask tick, does getLeadActivityTimeline's own
+      // inner Promise.all (assignments..scores) actually run.
+      empty, // activityTimeline: lead row
       {
         rowCount: 1,
         rows: [{ id: "e1", sequence_name: "Outbound v1", status: "active", enrolled_at: "2026-11-01T00:00:00Z", stopped_at: null }],
@@ -74,6 +73,20 @@ describe("getTouchpointHistory", () => {
         rowCount: 1,
         rows: [{ id: "s1", event_name: "pricing_page_viewed", occurred_at: "2026-11-20T00:00:00Z" }],
       }, // site_events
+      empty, // assignments
+      empty, // deals
+      {
+        rowCount: 1,
+        rows: [{ id: "m1", type: "demo", status: "completed", scheduled_at: "2026-11-10T00:00:00Z", outcome_notes: null, next_step: null }],
+      }, // meetings
+      empty, // tasks
+      empty, // notes
+      {
+        rowCount: 1,
+        rows: [{ id: "r1", channel: "email", classification: "interested", classification_confidence: "high", received_at: "2026-11-15T00:00:00Z" }],
+      }, // replies
+      empty, // audit_events
+      empty, // scores
     ]);
 
     const touchpoints = await getTouchpointHistory(tenantDb as any, TENANT_A, PROJECT_1, LEAD_1);

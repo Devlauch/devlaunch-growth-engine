@@ -168,7 +168,6 @@ export const env = {
   // docs/PHASE_2_HUNTER_VALIDATION.md).
   hunterApiKey: process.env.HUNTER_API_KEY ?? null,
 
-<<<<<<< HEAD
   // Milestone 2 (P1): public, unauthenticated-by-design site-analytics
   // ingestion endpoint (routes/publicAnalytics.ts) -- same per-IP/per-key
   // fixed-window rate-limit convention as publicLeadsRateLimitPer*PerMin

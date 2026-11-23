@@ -31,10 +31,12 @@ function makeTenantDb(responses: unknown[]) {
 
 const EMPTY = { rowCount: 0, rows: [] };
 
-/** The 12 getUnifiedTimeline queries, with no site/chatwoot correlation at all (a lead that was never tracked as a website visitor and has no Chatwoot mapping) — the common case most of these scenarios reuse. */
-function noCorrelationTimelineQueries(crmQueries: unknown[] = [EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY]) {
+/** The getUnifiedTimeline queries, with no site/chatwoot correlation at all (a lead that was never tracked as a website visitor and has no Chatwoot mapping) — the common case most of these scenarios reuse. crmQueries is getLeadActivityTimeline's own lead-row read followed by its 8 Promise.all queries (assignments, deals, meetings, tasks, notes, replies, auditEvents, scores). */
+function noCorrelationTimelineQueries(
+  crmQueries: unknown[] = [EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY, EMPTY],
+) {
   return [
-    ...crmQueries, // assignments, deals, meetings, tasks, notes, replies, auditEvents
+    ...crmQueries, // leadRow, assignments, deals, meetings, tasks, notes, replies, auditEvents, scores
     EMPTY, // meetingMeta
     EMPTY, // replyMeta
     { rowCount: 1, rows: [{ visitor_id: null }] }, // leads.visitor_id lookup
@@ -78,6 +80,7 @@ describe("getNextBestActionForLead", () => {
       { rowCount: 1, rows: [{ status: "new" }] }, // leads
       { rowCount: 1, rows: [{ stage: "contacted" }] }, // deals (lifecycle)
       // getUnifiedTimeline -> buildCrmEvents
+      EMPTY, // leadRow
       EMPTY,
       EMPTY,
       EMPTY,
@@ -85,6 +88,7 @@ describe("getNextBestActionForLead", () => {
       EMPTY,
       EMPTY,
       EMPTY, // assignments..auditEvents
+      EMPTY, // scores
       EMPTY, // meetingMeta
       EMPTY, // replyMeta
       { rowCount: 1, rows: [{ visitor_id: "visitor-abc" }] }, // leads.visitor_id lookup -> correlated
@@ -132,7 +136,13 @@ describe("getNextBestActionForLead", () => {
     const tenantDb = makeTenantDb([
       { rowCount: 1, rows: [{ status: "approved_for_outreach" }] }, // leads
       { rowCount: 0, rows: [] }, // deals (lifecycle)
-      // buildCrmEvents
+      // buildCrmEvents: leadRow fires first, then buildCrmEvents' own
+      // meetingMeta/replyMeta (its other Promise.all elements), THEN
+      // getLeadActivityTimeline's inner Promise.all (assignments..scores)
+      // — see unifiedCustomerProfile.test.ts's comment on this exact order.
+      EMPTY, // leadRow
+      { rowCount: 1, rows: [{ id: "meeting-1", status: "scheduled", scheduled_at: futureIso }] }, // meetingMeta
+      EMPTY, // replyMeta
       EMPTY, // assignments
       EMPTY, // deals (activityTimeline's own)
       {
@@ -152,8 +162,7 @@ describe("getNextBestActionForLead", () => {
       EMPTY, // notes
       EMPTY, // replies
       EMPTY, // auditEvents
-      { rowCount: 1, rows: [{ id: "meeting-1", status: "scheduled", scheduled_at: futureIso }] }, // meetingMeta
-      EMPTY, // replyMeta
+      EMPTY, // scores
       { rowCount: 1, rows: [{ visitor_id: null }] }, // leads.visitor_id lookup
       EMPTY, // chatbot_conversations
       EMPTY, // chatwoot_contact_leads mapping
@@ -168,16 +177,25 @@ describe("getNextBestActionForLead", () => {
     const tenantDb = makeTenantDb([
       { rowCount: 1, rows: [{ status: "qualified" }] }, // leads
       { rowCount: 0, rows: [] }, // deals (lifecycle)
-      // buildCrmEvents -- several fresh CRM events to push the engagement score up
+      // buildCrmEvents -- several fresh CRM events to push the engagement
+      // score up. Real order: leadRow fires first, then buildCrmEvents' own
+      // meetingMeta/replyMeta (its other Promise.all elements), THEN
+      // getLeadActivityTimeline's inner Promise.all (assignments..scores) —
+      // see unifiedCustomerProfile.test.ts's comment on this exact order.
+      EMPTY, // leadRow
+      EMPTY, // meetingMeta
+      EMPTY, // replyMeta
       { rowCount: 1, rows: [{ id: "a1", assigned_user_id: "u2", assigned_by: "u1", assigned_at: fresh }] }, // assignments
       EMPTY, // deals (activityTimeline's own)
       EMPTY, // meetings
-      { rowCount: 1, rows: [{ id: "t1", task_type: "call", title: "Call", status: "open", due_at: null, updated_at: fresh }] }, // tasks
+      {
+        rowCount: 1,
+        rows: [{ id: "t1", task_type: "call", title: "Call", status: "open", due_at: null, updated_at: fresh, created_at: fresh }],
+      }, // tasks
       { rowCount: 1, rows: [{ id: "n1", body: "Note", created_at: fresh }] }, // notes
       EMPTY, // replies
       EMPTY, // auditEvents
-      EMPTY, // meetingMeta
-      EMPTY, // replyMeta
+      EMPTY, // scores
       { rowCount: 1, rows: [{ visitor_id: "visitor-xyz" }] }, // leads.visitor_id lookup -> correlated
       { rowCount: 1, rows: [{ session_id: "s1", started_at: fresh, referrer: null, landing_url: null }] }, // sessions
       EMPTY, // pageviews
