@@ -569,3 +569,50 @@ pre-existing honest RLS-dependent skips, 1 unrelated failure in another
 concurrent session's own in-progress feature (`classifyObjection.test.ts`
 — not in any of this phase's 3 agents' scope, left to that session). Zero
 regressions from this phase's own work.
+
+## Milestone 3 Phase 2 Selective Reconciliation (2026-11-23)
+
+**Updated by:** Claude (orchestrator, 7-agent selective port of `milestone3-phase2`
+into this tree — full detail in `docs/PHASE_2_SELECTIVE_RECONCILIATION_REPORT.md`,
+not a summary repeated here).
+
+This was a reconciliation, not new feature work: `milestone3-phase2` (an isolated
+branch covering Sections A+B of an earlier roadmap) had diverged from this tree and
+built several things independently and concurrently with it. The audit found this
+tree already had more mature versions of most of what that branch built (`deals.ts`,
+`leadPromotion.ts`, `activityTimeline.ts`, `hunterContactDiscovery.ts`, `dedup.ts`'s
+exact-match tier, `prospectingCampaigns.ts`) — those were kept as-is, not replaced.
+
+**Genuinely new, ported in:**
+- Apollo company/decision-maker connector + provider (previously absent entirely),
+  now actually wired into `decisionMakerProvider.ts`'s real waterfall (was dead
+  code immediately after the initial port — fixed by the orchestrator, see the
+  main report's §5).
+- Configurable per-project qualification threshold (`qualification_settings`
+  table/route), extending `leadPromotion.ts`'s existing hardcoded-threshold
+  gating rather than replacing it. No-auto-deal-creation rule re-verified intact.
+- Lead-assignment CRUD and general CRM-tasks CRUD (both confirmed genuinely
+  missing by independent re-verification, not just inherited from an earlier audit).
+- Fuzzy/Levenshtein org dedup (flag-only, proven never to auto-merge), prospect
+  quality filters, bulk review/import, campaign discovery analytics (rebuilt
+  against this tree's actual `prospecting_campaigns` schema, which differs
+  materially from the isolated branch's assumptions).
+- 5 new activity-timeline event types merged into the existing
+  `activityTimeline.ts` (union, not a replacement) + a workflow stepper UI.
+- Provider cost/credit reporting (new) and Apollo/Google added to
+  `REAL_PROVIDERS` with real credential-backed health checks.
+
+**Deliberately excluded:** the isolated branch's own Hunter usage-metering scheme
+(migration `295`) — this tree's migration `440` is a verified strict superset
+(richer event types, real header-derived credits). Never applied to any database,
+so exclusion carried no migration-safety risk.
+
+**Verified:** `apps/api` 1110/1118 passing (8 pre-existing honest skips, 0
+failures), `apps/worker` 97/97, `packages/agent-sdk` 33/33, `apps/api` `tsc
+--noEmit` clean. `apps/dashboard` build currently fails on a pre-existing,
+unrelated bug (missing `hooks/useNotes.ts`, confirmed to predate this
+reconciliation via `git show` against the pre-merge snapshot) — not fixed here,
+out of scope as unrelated concurrent work.
+
+Not yet merged into master's actual branch — lives on `phase2-integration`,
+pending review.

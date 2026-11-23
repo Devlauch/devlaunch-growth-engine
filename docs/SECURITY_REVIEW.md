@@ -445,3 +445,25 @@ feature was added. Fixed in `apps/worker/Dockerfile` by building
 `@devlaunch/api` in the same build stage and copying its `dist/` and
 `package.json` into the worker's runtime image. Confirmed fixed: the error
 no longer appears in the worker's logs after rebuild.
+
+## Milestone 3 Phase 2 Selective Reconciliation (2026-11-23)
+
+Reviewed for the two security-relevant requirements this reconciliation was
+explicitly bound by:
+
+- **Single credential architecture.** Apollo/Google credential resolution
+  (`providerCredentials.ts`) is a thin wrapper over the existing
+  `credentialEncryption.ts`/`integrationCredentials.ts` path — no raw API key is
+  passed through a public API contract or persisted outside that approved path.
+  No second/duplicate credential system was introduced anywhere in this round.
+- **Tenant isolation.** New routes (lead-assignment CRUD, general CRM-tasks CRUD,
+  qualification-settings CRUD) were each independently tested for cross-tenant
+  access denial. Lead-assignment/CRM-tasks tests go further than the existing
+  convention of asserting a 403: they also assert the underlying SQL's bind
+  parameters are exactly the requesting tenant/project's ids and never contain
+  another tenant's id — i.e. isolation is verified structurally, not just as an
+  incidental side effect of test setup.
+
+No new finding. No change to RLS policies, the credential-encryption mechanism
+itself, or any existing tenant-isolation gate. Full detail of what was reviewed
+is in `docs/PHASE_2_SELECTIVE_RECONCILIATION_REPORT.md`.
