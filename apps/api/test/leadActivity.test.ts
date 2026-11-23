@@ -64,13 +64,18 @@ describe("GET /leads/:leadId/activity", () => {
     expect(res.status).toBe(404);
   });
 
-  it("returns a merged, chronologically-sorted timeline across assignments, deals, meetings, tasks, notes, replies and audit events", async () => {
+  it("returns a merged, chronologically-sorted timeline across lead creation, assignments, deals, meetings, tasks, notes, replies and audit events", async () => {
     const app = buildApp();
     queueResponses([
       ...mockMembership(),
       { rowCount: 1, rows: [{}] }, // project exists
       { rowCount: 1, rows: [{}] }, // lead exists in project
-      // Promise.all order: assignments, deals, meetings, tasks, notes, replies, auditEvents
+      // getLeadActivityTimeline's own lead row read (source/origin/custom_fields/created_at)
+      {
+        rowCount: 1,
+        rows: [{ source: "internal", origin: null, custom_fields: {}, created_at: "2025-12-20T00:00:00Z" }],
+      },
+      // Promise.all order: assignments, deals, meetings, tasks, notes, replies, auditEvents, scores
       {
         rowCount: 1,
         rows: [
@@ -79,7 +84,15 @@ describe("GET /leads/:leadId/activity", () => {
       },
       {
         rowCount: 1,
-        rows: [{ id: "deal-1", stage: "proposal", value_amount: "500.00", stage_changed_at: "2026-01-05T00:00:00Z" }],
+        rows: [
+          {
+            id: "deal-1",
+            stage: "proposal",
+            value_amount: "500.00",
+            stage_changed_at: "2026-01-05T00:00:00Z",
+            created_at: "2025-12-22T00:00:00Z",
+          },
+        ],
       },
       {
         rowCount: 1,
@@ -104,6 +117,7 @@ describe("GET /leads/:leadId/activity", () => {
             status: "completed",
             due_at: "2026-01-04T00:00:00Z",
             updated_at: "2026-01-04T12:00:00Z",
+            created_at: "2025-12-23T00:00:00Z",
           },
         ],
       },
@@ -134,6 +148,7 @@ describe("GET /leads/:leadId/activity", () => {
           },
         ],
       },
+      { rowCount: 0, rows: [] }, // scores (no lead_scores row yet)
     ]);
 
     const res = await request(app)
@@ -141,10 +156,13 @@ describe("GET /leads/:leadId/activity", () => {
       .set("X-Dev-User-Id", USER_1);
 
     expect(res.status).toBe(200);
-    expect(res.body.activity).toHaveLength(7);
+    // 7 original items (assignment/stage_change/meeting/task/note/reply/audit_event)
+    // + lead_created + deal_created + crm_task_created
+    expect(res.body.activity).toHaveLength(10);
     // Sorted newest first: audit event (01-07) > note (01-06) > deal
     // stage_change (01-05) > task (01-04 12:00) > meeting (01-03) >
-    // reply (01-02) > assignment (01-01)
+    // reply (01-02) > assignment (01-01) > task created (12-23) >
+    // deal created (12-22) > lead created (12-20)
     expect(res.body.activity.map((item: { type: string }) => item.type)).toEqual([
       "audit_event",
       "note",
@@ -153,18 +171,22 @@ describe("GET /leads/:leadId/activity", () => {
       "meeting",
       "reply",
       "assignment",
+      "crm_task_created",
+      "deal_created",
+      "lead_created",
     ]);
     expect(res.body.activity[0].sourceId).toBe("audit-1");
     expect(res.body.activity[0].summary).toBe("lead promoted to crm");
     expect(res.body.activity[0].detail).toBe(JSON.stringify({ companyCreated: true }));
   });
 
-  it("returns an empty timeline when nothing has happened on this lead yet", async () => {
+  it("returns an empty timeline when nothing has happened on this lead yet (and the lead row itself is missing)", async () => {
     const app = buildApp();
     queueResponses([
       ...mockMembership(),
       { rowCount: 1, rows: [{}] }, // project exists
       { rowCount: 1, rows: [{}] }, // lead exists in project
+      { rowCount: 0, rows: [] }, // lead row read returns nothing (defense in depth — never throws)
       { rowCount: 0, rows: [] }, // assignments
       { rowCount: 0, rows: [] }, // deals
       { rowCount: 0, rows: [] }, // meetings
@@ -172,6 +194,7 @@ describe("GET /leads/:leadId/activity", () => {
       { rowCount: 0, rows: [] }, // notes
       { rowCount: 0, rows: [] }, // replies
       { rowCount: 0, rows: [] }, // audit events
+      { rowCount: 0, rows: [] }, // scores
     ]);
 
     const res = await request(app)
@@ -180,5 +203,70 @@ describe("GET /leads/:leadId/activity", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.activity).toEqual([]);
+  });
+
+  it("surfaces lead_scored and discovery_sourced entries ported from Phase 2 (Agent C2), adapted to this tree's real schema", async () => {
+    const app = buildApp();
+    queueResponses([
+      ...mockMembership(),
+      { rowCount: 1, rows: [{}] }, // project exists
+      { rowCount: 1, rows: [{}] }, // lead exists in project
+      {
+        rowCount: 1,
+        rows: [
+          {
+            source: "discovery",
+            origin: "https://example.com",
+            custom_fields: { discoveredOrganizationId: "org-1" },
+            created_at: "2025-12-01T00:00:00Z",
+          },
+        ],
+      },
+      { rowCount: 0, rows: [] }, // assignments
+      { rowCount: 0, rows: [] }, // deals
+      { rowCount: 0, rows: [] }, // meetings
+      { rowCount: 0, rows: [] }, // tasks
+      { rowCount: 0, rows: [] }, // notes
+      { rowCount: 0, rows: [] }, // replies
+      { rowCount: 0, rows: [] }, // audit events
+      {
+        rowCount: 1,
+        rows: [{ id: "score-1", total_score: "72", why_summary: "Strong ICP fit", computed_at: "2025-12-10T00:00:00Z" }],
+      },
+      // discovery provenance query (only issued because custom_fields carried discoveredOrganizationId)
+      {
+        rowCount: 1,
+        rows: [
+          {
+            id: "org-1",
+            name: "Acme Co",
+            source_url: "https://acme.example.com",
+            discovered_at: "2025-12-01T00:00:00Z",
+            discovery_source_name: "Public Directory",
+            discovery_source_connector_type: "public_directory",
+            campaign_name: "Q4 outbound",
+          },
+        ],
+      },
+    ]);
+
+    const res = await request(app)
+      .get(`/api/v1/tenants/${TENANT_A}/projects/${PROJECT_1}/leads/${LEAD_1}/activity`)
+      .set("X-Dev-User-Id", USER_1);
+
+    expect(res.status).toBe(200);
+    // lead_created and discovery_sourced share the same timestamp here
+    // (2025-12-01T00:00:00Z, the lead's creation == the org's discovered_at
+    // in this fixture) — only lead_scored's distinct, later computed_at
+    // (2025-12-10) is asserted to sort first; the relative order of the two
+    // same-timestamp items is not a behavior this test pins down.
+    expect(res.body.activity[0].type).toBe("lead_scored");
+    expect(res.body.activity.map((item: { type: string }) => item.type)).toEqual(
+      expect.arrayContaining(["lead_scored", "discovery_sourced", "lead_created"]),
+    );
+    expect(res.body.activity[0].summary).toBe("Lead scored 72/100");
+    const discoveryItem = res.body.activity.find((item: { type: string }) => item.type === "discovery_sourced");
+    expect(discoveryItem.summary).toBe("Discovered via Public Directory");
+    expect(discoveryItem.detail).toBe("Campaign: Q4 outbound | Org: Acme Co");
   });
 });

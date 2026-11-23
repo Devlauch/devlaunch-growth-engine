@@ -55,6 +55,52 @@ import type { PoolClient } from "pg";
  * every stage it has ever passed through. If finer-grained stage history
  * is ever needed, that requires a real deal_stage_history table (out of
  * scope here); this function does not invent one.
+ *
+ * --- Phase 2 reconciliation additions (Agent C2) ---
+ *
+ * The event types below were ported from the independently-built
+ * milestone3-phase2 branch's activityTimeline.ts, adapted to the columns
+ * that actually exist on THIS tree (verified against the real migrations,
+ * not assumed from the other branch):
+ *   - lead_created: leads.source/origin/custom_fields/created_at
+ *     (015_create_leads.sql)
+ *   - lead_scored: lead_scores.total_score/why_summary/computed_at
+ *     (032_create_lead_scores.sql)
+ *   - deal_created: deals.created_at (278_create_deals.sql) — a second,
+ *     distinct item from the existing 'stage_change' item, which uses
+ *     stage_changed_at. A deal therefore now contributes up to two items:
+ *     its creation and its latest stage.
+ *   - crm_task_created: crm_tasks.created_at (049_create_crm_tasks.sql) —
+ *     likewise a second, distinct item alongside the existing 'task' item
+ *     (latest status via updated_at).
+ *   - discovery_sourced: ONLY when leads.custom_fields.discoveredOrganizationId
+ *     is present (the actual convention apps/api/src/routes/discovery.ts's
+ *     promote-to-lead endpoint uses on this tree). Phase 2's version joined
+ *     through a `prospecting_campaign_organizations` table and read a
+ *     `discovered_contacts.source_provider` column — NEITHER exists on this
+ *     tree. This tree's actual schema links a discovered org to a campaign
+ *     via a direct `discovered_organizations.prospecting_campaign_id` FK
+ *     (323_create_prospecting_campaigns.sql), so the query below joins
+ *     through that column instead, and drops the fabricated
+ *     source_provider read entirely rather than guessing at one.
+ *
+ * Deliberately NOT ported (merge reconciliation, orchestrator — this file
+ * does not guess at an interface that didn't exist when each piece landed):
+ *   - deal_stage won/lost reason: phase2's deal_stage item reads
+ *     deals.lost_reason / deals.won_reason. These columns now exist on this
+ *     tree (packages/db/migrations/442_add_outcome_reasons_to_deals.sql,
+ *     merged alongside this file) — surfacing them on the 'stage_change'
+ *     item's `detail` is a small, well-scoped follow-up, not done here to
+ *     keep this merge change strictly additive/mechanical.
+ *   - crm_task_status as a distinct item kind: phase2 emitted a separate
+ *     'crm_task_status' entry for completed/skipped tasks. This tree's
+ *     existing 'task' item already surfaces the task's current status at
+ *     its updated_at timestamp (crm_tasks has no dedicated
+ *     completed_at/status-changed-at column, same limitation phase2 itself
+ *     documented) — adding a second, separately-labeled item for the same
+ *     single column would duplicate the same fact under two different
+ *     labels, not add real information. Not ported; 'task' already covers
+ *     this.
  */
 
 export type ActivityItemType =
@@ -64,7 +110,12 @@ export type ActivityItemType =
   | "task"
   | "note"
   | "reply"
-  | "audit_event";
+  | "audit_event"
+  | "lead_created"
+  | "discovery_sourced"
+  | "lead_scored"
+  | "deal_created"
+  | "crm_task_created";
 
 /** "lead.promoted_to_crm" -> "lead promoted to crm" — a plain reformat of
  * the real action string already recorded on the audit_events row, never a
@@ -98,7 +149,25 @@ export async function getLeadActivityTimeline(
   projectId: string,
   leadId: string,
 ): Promise<ActivityItem[]> {
-  const [assignments, deals, meetings, tasks, notes, replies, auditEvents] = await Promise.all([
+  // The route (leadActivity.ts) already confirmed this lead exists in this
+  // tenant/project with a cheap `SELECT 1` before ever calling this
+  // function — this is a second, deliberate query because that existence
+  // check never reads the columns actually needed here (source/origin/
+  // custom_fields/created_at, for the 'lead_created' item and to detect
+  // discovery provenance below). Not folded into one query: the route's
+  // existence check and this lib's own data needs are separate concerns
+  // (same separation of concerns as every other table this file reads).
+  const leadResult = await tenantDb.query(
+    `SELECT source, origin, custom_fields, created_at
+     FROM leads
+     WHERE id = $1 AND tenant_id = $2 AND project_id = $3`,
+    [leadId, tenantId, projectId],
+  );
+  const leadRow = leadResult.rows[0] as
+    | { source: string; origin: string | null; custom_fields: Record<string, unknown>; created_at: string }
+    | undefined;
+
+  const [assignments, deals, meetings, tasks, notes, replies, auditEvents, scores] = await Promise.all([
     tenantDb.query(
       `SELECT id, assigned_user_id, assigned_by, assigned_at
        FROM lead_assignments
@@ -107,7 +176,7 @@ export async function getLeadActivityTimeline(
       [tenantId, projectId, leadId],
     ),
     tenantDb.query(
-      `SELECT id, stage, value_amount, stage_changed_at
+      `SELECT id, stage, value_amount, stage_changed_at, created_at
        FROM deals
        WHERE tenant_id = $1 AND project_id = $2 AND lead_id = $3`,
       [tenantId, projectId, leadId],
@@ -120,7 +189,7 @@ export async function getLeadActivityTimeline(
       [tenantId, projectId, leadId],
     ),
     tenantDb.query(
-      `SELECT id, task_type, title, status, due_at, updated_at
+      `SELECT id, task_type, title, status, due_at, updated_at, created_at
        FROM crm_tasks
        WHERE tenant_id = $1 AND project_id = $2 AND lead_id = $3
        ORDER BY updated_at DESC`,
@@ -147,9 +216,28 @@ export async function getLeadActivityTimeline(
        ORDER BY created_at DESC`,
       [tenantId, leadId],
     ),
+    // lead_scores: at most one row per lead (UNIQUE (lead_id), see
+    // 032_create_lead_scores.sql) — the lead's current computed score, not
+    // a history of every recomputation.
+    tenantDb.query(
+      `SELECT id, total_score, why_summary, computed_at
+       FROM lead_scores
+       WHERE tenant_id = $1 AND project_id = $2 AND lead_id = $3`,
+      [tenantId, projectId, leadId],
+    ),
   ]);
 
   const items: ActivityItem[] = [];
+
+  if (leadRow) {
+    items.push({
+      type: "lead_created",
+      timestamp: leadRow.created_at,
+      summary: `Lead created (source: ${leadRow.source})`,
+      detail: leadRow.origin ? `Origin: ${leadRow.origin}` : null,
+      sourceId: leadId,
+    });
+  }
 
   for (const row of assignments.rows as Array<{
     id: string;
@@ -171,7 +259,19 @@ export async function getLeadActivityTimeline(
     stage: string;
     value_amount: string | null;
     stage_changed_at: string;
+    created_at: string;
   }>) {
+    // Ported from phase2 (Agent C2): the deal's own creation is a distinct,
+    // real event from its latest stage — see this file's header comment for
+    // why 'stage_change' alone (the pre-existing item) can only ever show
+    // the CURRENT stage, never the deal's full history.
+    items.push({
+      type: "deal_created",
+      timestamp: row.created_at,
+      summary: "Deal created",
+      detail: null,
+      sourceId: row.id,
+    });
     // See this file's header comment: one entry per deal (its latest
     // transition only), never a fabricated full stage history.
     items.push({
@@ -210,7 +310,20 @@ export async function getLeadActivityTimeline(
     status: string;
     due_at: string | null;
     updated_at: string;
+    created_at: string;
   }>) {
+    // Ported from phase2 (Agent C2): the task's own creation is a distinct
+    // real event from its current status (the pre-existing 'task' item
+    // below, which can only ever show the CURRENT status via updated_at —
+    // see this file's header comment for why a separate 'crm_task_status'
+    // item type was deliberately NOT also added).
+    items.push({
+      type: "crm_task_created",
+      timestamp: row.created_at,
+      summary: `CRM task created: ${row.title}`,
+      detail: null,
+      sourceId: row.id,
+    });
     items.push({
       type: "task",
       // updated_at is the best available signal for "when this task's
@@ -263,6 +376,74 @@ export async function getLeadActivityTimeline(
       detail: Object.keys(metadata).length > 0 ? JSON.stringify(metadata) : null,
       sourceId: row.id,
     });
+  }
+
+  // Ported from phase2 (Agent C2): at most one row (UNIQUE (lead_id), see
+  // 032_create_lead_scores.sql) — the lead's current computed score.
+  for (const row of scores.rows as Array<{
+    id: string;
+    total_score: string | number;
+    why_summary: string;
+    computed_at: string;
+  }>) {
+    items.push({
+      type: "lead_scored",
+      timestamp: row.computed_at,
+      summary: `Lead scored ${Number(row.total_score)}/100`,
+      detail: row.why_summary,
+      sourceId: row.id,
+    });
+  }
+
+  // Ported from phase2 (Agent C2), adapted to this tree's actual schema
+  // (see this file's header comment for the full rationale): only emitted
+  // when the lead was sourced from discovery, detected the same way
+  // discovery.ts's promote-to-lead endpoint itself records it —
+  // custom_fields.discoveredOrganizationId. A single query, joined through
+  // this tree's real `discovered_organizations.prospecting_campaign_id`
+  // direct FK (not phase2's non-existent junction table), never fabricates
+  // a provider/campaign when the underlying rows don't show one.
+  const discoveredOrganizationId =
+    leadRow && typeof leadRow.custom_fields?.discoveredOrganizationId === "string"
+      ? (leadRow.custom_fields.discoveredOrganizationId as string)
+      : null;
+  if (discoveredOrganizationId) {
+    const discoveryResult = await tenantDb.query(
+      `SELECT o.id, o.name, o.source_url, o.discovered_at,
+              ds.name AS discovery_source_name,
+              ds.connector_type AS discovery_source_connector_type,
+              pc.name AS campaign_name
+       FROM discovered_organizations o
+       LEFT JOIN discovery_sources ds ON ds.id = o.discovery_source_id
+       LEFT JOIN prospecting_campaigns pc ON pc.id = o.prospecting_campaign_id
+       WHERE o.id = $1 AND o.tenant_id = $2 AND o.project_id = $3`,
+      [discoveredOrganizationId, tenantId, projectId],
+    );
+    const org = discoveryResult.rows[0] as
+      | {
+          id: string;
+          name: string;
+          source_url: string | null;
+          discovered_at: string;
+          discovery_source_name: string | null;
+          discovery_source_connector_type: string | null;
+          campaign_name: string | null;
+        }
+      | undefined;
+    if (org) {
+      // row gone (e.g. hard-deleted) — never invent one
+      const providerLabel = org.discovery_source_name ?? org.discovery_source_connector_type;
+      const detailParts: string[] = [];
+      if (org.campaign_name) detailParts.push(`Campaign: ${org.campaign_name}`);
+      if (org.name) detailParts.push(`Org: ${org.name}`);
+      items.push({
+        type: "discovery_sourced",
+        timestamp: org.discovered_at,
+        summary: providerLabel ? `Discovered via ${providerLabel}` : "Discovered",
+        detail: detailParts.length > 0 ? detailParts.join(" | ") : null,
+        sourceId: org.id,
+      });
+    }
   }
 
   items.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());

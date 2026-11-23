@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   NotConfiguredDecisionMakerProvider,
   NotConfiguredError,
@@ -7,6 +7,15 @@ import {
   type DecisionMakerProvider,
   type DecisionMakerCandidate,
 } from "../src/lib/decisionMakerProvider.js";
+
+const TENANT_1 = "11111111-1111-1111-1111-111111111111";
+const PROJECT_1 = "22222222-2222-2222-2222-222222222222";
+
+afterEach(() => {
+  vi.resetModules();
+  vi.doUnmock("../src/lib/integrationCredentials.js");
+  delete process.env.APOLLO_API_KEY;
+});
 
 describe("NotConfiguredDecisionMakerProvider", () => {
   it("always throws NotConfiguredError — never returns a fabricated contact", async () => {
@@ -25,10 +34,31 @@ describe("NotConfiguredDecisionMakerProvider", () => {
 });
 
 describe("buildDecisionMakerWaterfall", () => {
-  it("today returns just the NotConfigured stub (no real provider is configured in this environment)", () => {
-    const providers = buildDecisionMakerWaterfall();
+  it("with no tenant context, returns just the NotConfigured stub (nothing to resolve a credential against)", async () => {
+    const providers = await buildDecisionMakerWaterfall();
     expect(providers).toHaveLength(1);
     expect(providers[0]?.name).toBe("not_configured");
+  });
+
+  it("with tenant context but no resolvable Apollo credential, still returns just the NotConfigured stub", async () => {
+    vi.doMock("../src/lib/integrationCredentials.js", () => ({
+      getIntegrationCredential: vi.fn(async () => null),
+    }));
+    const { buildDecisionMakerWaterfall: build } = await import("../src/lib/decisionMakerProvider.js");
+    const providers = await build({ query: vi.fn() } as never, TENANT_1, PROJECT_1);
+    expect(providers).toHaveLength(1);
+    expect(providers[0]?.name).toBe("not_configured");
+  });
+
+  it("prepends a real ApolloDecisionMakerProvider ahead of the stub when a tenant Apollo credential resolves", async () => {
+    vi.doMock("../src/lib/integrationCredentials.js", () => ({
+      getIntegrationCredential: vi.fn(async () => ({ config: {}, secret: "tenant-apollo-key", status: "connected" })),
+    }));
+    const { buildDecisionMakerWaterfall: build } = await import("../src/lib/decisionMakerProvider.js");
+    const providers = await build({ query: vi.fn() } as never, TENANT_1, PROJECT_1);
+    expect(providers).toHaveLength(2);
+    expect(providers[0]?.name).toBe("apollo");
+    expect(providers[1]?.name).toBe("not_configured");
   });
 });
 

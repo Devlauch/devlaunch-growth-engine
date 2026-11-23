@@ -65,6 +65,8 @@ import { companiesRouter } from "./routes/companies.js";
 import { contactsRouter } from "./routes/contacts.js";
 import { notesRouter } from "./routes/notes.js";
 import { leadActivityRouter } from "./routes/leadActivity.js";
+import { leadAssignmentsRouter } from "./routes/leadAssignments.js";
+import { crmTasksRouter } from "./routes/crmTasks.js";
 import { chatwootIntegrationRouter } from "./routes/chatwootIntegration.js";
 import { crmDashboardRouter } from "./routes/crmDashboard.js";
 import { dealHealthRouter } from "./routes/dealHealth.js";
@@ -77,6 +79,7 @@ import { postizIntegrationRouter } from "./routes/postizIntegration.js";
 import { postizWebhooksRouter } from "./routes/postizWebhooks.js";
 import { prospectingCampaignsRouter } from "./routes/prospectingCampaigns.js";
 import { leadPromotionRouter } from "./routes/leadPromotion.js";
+import { qualificationSettingsRouter } from "./routes/qualificationSettings.js";
 import { growthAdvisorRouter } from "./routes/growthAdvisor.js";
 import { publicGrowthRouter } from "./routes/publicGrowth.js";
 import { internalGrowthRouter } from "./routes/internalGrowth.js";
@@ -246,6 +249,11 @@ export function createApp(): express.Express {
     mainCors,
     leadPromotionRouter,
   );
+  app.use(
+    "/api/v1/tenants/:tenantId/projects/:projectId/qualification-settings",
+    mainCors,
+    qualificationSettingsRouter,
+  );
   app.use("/api/v1/tenants/:tenantId/projects/:projectId/learning-loop", mainCors, learningLoopRouter);
   app.use("/api/v1/tenants/:tenantId/projects/:projectId/competitors", mainCors, competitorsRouter);
   app.use("/api/v1/tenants/:tenantId/projects/:projectId/content-calendars", mainCors, contentCalendarsRouter);
@@ -297,6 +305,12 @@ export function createApp(): express.Express {
   app.use("/api/v1/tenants/:tenantId/projects/:projectId/contacts", mainCors, contactsRouter);
   app.use("/api/v1/tenants/:tenantId/projects/:projectId/notes", mainCors, notesRouter);
   app.use("/api/v1/tenants/:tenantId/projects/:projectId/leads/:leadId/activity", mainCors, leadActivityRouter);
+  app.use(
+    "/api/v1/tenants/:tenantId/projects/:projectId/leads/:leadId/assignments",
+    mainCors,
+    leadAssignmentsRouter,
+  );
+  app.use("/api/v1/tenants/:tenantId/projects/:projectId/crm-tasks", mainCors, crmTasksRouter);
   // (chatwoot/listmonk/postiz integration routers are mounted earlier,
   // before the generic /integrations registry router — see that comment.)
   app.use("/api/v1/tenants/:tenantId/projects/:projectId/crm-dashboard", mainCors, crmDashboardRouter);

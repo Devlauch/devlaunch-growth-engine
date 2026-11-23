@@ -117,14 +117,20 @@ describe("GET /leads/:leadId/meetings/:meetingId/prep", () => {
       { rowCount: 0, rows: [] }, // enrichment
       { rowCount: 0, rows: [] }, // deal
       { rowCount: 0, rows: [] }, // recent notes
-      // getLeadActivityTimeline's own Promise.all: assignments, deals, meetings, tasks, notes, replies, audit_events
-      { rowCount: 0, rows: [] },
-      { rowCount: 0, rows: [] },
-      { rowCount: 0, rows: [] },
-      { rowCount: 0, rows: [] },
-      { rowCount: 0, rows: [] },
-      { rowCount: 0, rows: [] },
-      { rowCount: 0, rows: [] },
+      // getLeadActivityTimeline's own lead-row read, then its Promise.all:
+      // assignments, deals, meetings, tasks, notes, replies, audit_events,
+      // scores (audit_events + scores both land here — one from master's
+      // own independent audit-event addition, one ported from Phase 2
+      // Agent C2 — this file's merged activityTimeline.ts queries both)
+      { rowCount: 0, rows: [] }, // lead row (not found here — defense in depth, never throws)
+      { rowCount: 0, rows: [] }, // assignments
+      { rowCount: 0, rows: [] }, // deals
+      { rowCount: 0, rows: [] }, // meetings
+      { rowCount: 0, rows: [] }, // tasks
+      { rowCount: 0, rows: [] }, // notes
+      { rowCount: 0, rows: [] }, // replies
+      { rowCount: 0, rows: [] }, // audit events
+      { rowCount: 0, rows: [] }, // scores
     ]);
 
     const res = await request(app).get(url()).set("X-Dev-User-Id", USER_1);
@@ -176,14 +182,18 @@ describe("GET /leads/:leadId/meetings/:meetingId/prep", () => {
         ],
       }, // deal
       { rowCount: 1, rows: [{ id: "note-1", body: "Great call", created_at: "2026-01-01T00:00:00Z" }] }, // notes
-      // activity timeline's internal queries, one assignment only (assignments, deals, meetings, tasks, notes, replies, audit_events)
+      // activity timeline's own lead-row read, then its Promise.all, one
+      // assignment only (everything else empty, including audit events and
+      // scores)
+      { rowCount: 0, rows: [] }, // lead row (not found here — defense in depth, never throws)
       { rowCount: 1, rows: [{ id: "a1", assigned_user_id: "u1", assigned_by: null, assigned_at: "2026-01-01T00:00:00Z" }] },
-      { rowCount: 0, rows: [] },
-      { rowCount: 0, rows: [] },
-      { rowCount: 0, rows: [] },
-      { rowCount: 0, rows: [] },
-      { rowCount: 0, rows: [] },
-      { rowCount: 0, rows: [] },
+      { rowCount: 0, rows: [] }, // deals
+      { rowCount: 0, rows: [] }, // meetings
+      { rowCount: 0, rows: [] }, // tasks
+      { rowCount: 0, rows: [] }, // notes
+      { rowCount: 0, rows: [] }, // replies
+      { rowCount: 0, rows: [] }, // audit events
+      { rowCount: 0, rows: [] }, // scores
       // computeDealHealthForDeal's own queries, run once the deal is known to
       // exist (reused directly from dealHealth.ts — see meetingPrep.ts):
       // latest meeting, latest reply, 4x activity MAX(), typical deal value.

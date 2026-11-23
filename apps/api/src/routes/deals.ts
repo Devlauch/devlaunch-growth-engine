@@ -24,7 +24,7 @@ import { DEAL_STAGES, STAGE_STALL_THRESHOLD_DAYS, assertActiveTenantMember, chec
 export const dealsRouter = Router({ mergeParams: true });
 dealsRouter.use(requireAuth, requireTenantMembership);
 
-const DEAL_COLUMNS = `id, tenant_id, project_id, lead_id, stage, value_amount, expected_close_date, owner_user_id, created_by, stage_changed_at, created_at, updated_at`;
+const DEAL_COLUMNS = `id, tenant_id, project_id, lead_id, stage, value_amount, expected_close_date, owner_user_id, created_by, lost_reason, won_reason, stage_changed_at, created_at, updated_at`;
 const ASSIGNMENT_COLUMNS = `id, tenant_id, project_id, lead_id, assigned_user_id, assigned_by, assigned_at, created_at`;
 
 function paramId(req: Request, name: string): string {
@@ -238,12 +238,31 @@ dealsRouter.get("/:id", async (req, res, next) => {
   }
 });
 
-const updateDealSchema = z.object({
-  stage: z.enum(DEAL_STAGES).optional(),
-  valueAmount: z.number().nonnegative().max(999_999_999.99).nullish(),
-  expectedCloseDate: z.string().date().nullish(),
-  ownerUserId: z.string().uuid().nullish(),
-});
+const updateDealSchema = z
+  .object({
+    stage: z.enum(DEAL_STAGES).optional(),
+    valueAmount: z.number().nonnegative().max(999_999_999.99).nullish(),
+    expectedCloseDate: z.string().date().nullish(),
+    ownerUserId: z.string().uuid().nullish(),
+    // Ported from milestone3-phase2 (packages/db/migrations/
+    // 442_add_outcome_reasons_to_deals.sql): the spec's "record lost/won
+    // outcomes" requirement — moving a deal to 'lost' requires a reason,
+    // moving to 'won' accepts an optional one. This does not change which
+    // stage transitions are allowed (still unrestricted, per this file's
+    // own header comment) — only what's required alongside a transition
+    // to these two specific stages.
+    lostReason: z.string().trim().min(1).max(2000).optional(),
+    wonReason: z.string().trim().min(1).max(2000).optional(),
+  })
+  .superRefine((body, ctx) => {
+    if (body.stage === "lost" && !body.lostReason) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "lostReason is required when moving a deal to the 'lost' stage",
+        path: ["lostReason"],
+      });
+    }
+  });
 
 /**
  * PATCH /deals/:id — update stage/value/expected close date/owner. A real
@@ -251,6 +270,14 @@ const updateDealSchema = z.object({
  * trigger — see 278_create_deals.sql's header comment), which is what
  * drives the stalled-deal follow-up check. Reaching 'won' is what makes a
  * lead appear in the `customers` view.
+ *
+ * lostReason/wonReason (packages/db/migrations/
+ * 442_add_outcome_reasons_to_deals.sql, ported from milestone3-phase2):
+ * moving a deal to 'lost' requires lostReason in the body (rejected
+ * otherwise); moving to 'won' accepts an optional wonReason. This does not
+ * add a transition-adjacency restriction — any stage can still move to any
+ * other stage, per this file's own header comment — it only requires a
+ * reason alongside these two specific target stages.
  */
 dealsRouter.patch("/:id", async (req, res, next) => {
   try {
@@ -273,6 +300,8 @@ dealsRouter.patch("/:id", async (req, res, next) => {
            value_amount = CASE WHEN $4::boolean THEN $5 ELSE value_amount END,
            expected_close_date = CASE WHEN $6::boolean THEN $7 ELSE expected_close_date END,
            owner_user_id = CASE WHEN $8::boolean THEN $9 ELSE owner_user_id END,
+           lost_reason = CASE WHEN $3 = 'lost' THEN $11 ELSE lost_reason END,
+           won_reason = CASE WHEN $3 = 'won' THEN $12 ELSE won_reason END,
            stage_changed_at = CASE WHEN $10::boolean THEN now() ELSE stage_changed_at END
        WHERE id = $1 AND tenant_id = $2
        RETURNING ${DEAL_COLUMNS}`,
@@ -287,6 +316,8 @@ dealsRouter.patch("/:id", async (req, res, next) => {
         "ownerUserId" in body,
         body.ownerUserId ?? null,
         stageChanged,
+        body.lostReason ?? null,
+        body.wonReason ?? null,
       ],
     );
     const deal = result.rows[0];

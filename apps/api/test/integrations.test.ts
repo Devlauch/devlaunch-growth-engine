@@ -89,14 +89,37 @@ describe("GET /integrations — real registry, never a fabricated 'connected' st
       .set("X-Dev-User-Id", USER_1);
 
     expect(res.status).toBe(200);
-    expect(res.body.integrations).toHaveLength(12);
+    expect(res.body.integrations).toHaveLength(14);
     expect(res.body.integrations.some((i: { provider: string }) => i.provider === "chatwoot")).toBe(true);
     expect(res.body.integrations.some((i: { provider: string }) => i.provider === "hunter")).toBe(true);
     expect(res.body.integrations.some((i: { provider: string }) => i.provider === "clearbit")).toBe(true);
     expect(res.body.integrations.some((i: { provider: string }) => i.provider === "google_ads")).toBe(true);
     expect(res.body.integrations.some((i: { provider: string }) => i.provider === "meta_ads")).toBe(true);
     expect(res.body.integrations.some((i: { provider: string }) => i.provider === "whatsapp_business")).toBe(true);
+    expect(res.body.integrations.some((i: { provider: string }) => i.provider === "apollo")).toBe(true);
+    expect(res.body.integrations.some((i: { provider: string }) => i.provider === "google")).toBe(true);
     expect(res.body.integrations.every((i: { status: string }) => i.status === "not_connected")).toBe(true);
+  });
+
+  it("marks apollo and google as 'real' (unified credential path), never a fabricated 'connected' state with no row", async () => {
+    const { app, queryMock } = await loadApp();
+    queueResponses(queryMock, [
+      ...mockMembership(),
+      { rowCount: 1, rows: [{}] },
+      { rowCount: 0, rows: [] },
+    ]);
+
+    const res = await request(app)
+      .get(`/api/v1/tenants/${TENANT_A}/projects/${PROJECT_1}/integrations`)
+      .set("X-Dev-User-Id", USER_1);
+
+    expect(res.status).toBe(200);
+    const apollo = res.body.integrations.find((i: { provider: string }) => i.provider === "apollo");
+    const google = res.body.integrations.find((i: { provider: string }) => i.provider === "google");
+    expect(apollo.real).toBe(true);
+    expect(apollo.status).toBe("not_connected");
+    expect(google.real).toBe(true);
+    expect(google.status).toBe("not_connected");
   });
 
   it("merges in a real existing row's status and config instead of fabricating it", async () => {
@@ -280,5 +303,61 @@ describe("POST /integrations/:provider/health-check", () => {
     );
     expect(auditCall).toBeDefined();
     expect(auditCall![1][2]).toBe("integration.health_checked");
+  });
+
+  it("honestly reports apollo as 'error' (never a fabricated 'connected') with a not-configured detail when no secret is stored", async () => {
+    const { app, queryMock } = await loadApp();
+    queueResponses(queryMock, [
+      ...mockMembership(),
+      { rowCount: 1, rows: [{}] }, // project exists
+      { rowCount: 1, rows: [{ id: "int-1" }] }, // integration id lookup
+      { rowCount: 1, rows: [{ config: {}, encrypted_credential_ref: null, status: "pending_setup" }] }, // getIntegrationCredential — no secret
+      undefined, // audit insert
+    ]);
+
+    const res = await request(app)
+      .post(`/api/v1/tenants/${TENANT_A}/projects/${PROJECT_1}/integrations/apollo/health-check`)
+      .set("X-Dev-User-Id", USER_1);
+
+    expect(res.status).toBe(200);
+    // routes/integrations.ts's generic health-check route collapses any
+    // non-'connected' checkHealth status (including apolloClient.ts's own
+    // honest 'not_configured') to 'error' at the HTTP-response/DB-status
+    // level — same existing behavior hunterClient.ts's 'not_configured'
+    // already gets. The underlying honest reason survives in `detail`.
+    expect(res.body.status).toBe("error");
+    expect(res.body.detail).toMatch(/no apollo api key/i);
+
+    const updateCall = queryMock.mock.calls.find(
+      ([sql]) => typeof sql === "string" && sql.includes("UPDATE integrations SET status"),
+    );
+    expect(updateCall).toBeDefined();
+    expect(updateCall![1][0]).toBe("error");
+  });
+
+  it("honestly reports google as 'error' with a not-configured detail when the engine id (cx) is missing even though a key is stored", async () => {
+    const { app, queryMock } = await loadApp();
+    queueResponses(queryMock, [
+      ...mockMembership(),
+      { rowCount: 1, rows: [{}] }, // project exists
+      { rowCount: 1, rows: [{ id: "int-1" }] }, // integration id lookup
+      {
+        rowCount: 1,
+        rows: [{ config: {}, encrypted_credential_ref: "v1.somevalue", status: "pending_setup" }],
+      },
+      undefined, // audit insert
+    ]);
+    // getIntegrationCredential will try to decrypt — encryption isn't
+    // configured in this test (no INTEGRATION_CREDENTIALS_KEY), so it logs
+    // a warning and returns secret: null, which is still enough to exercise
+    // the "missing engine id" honest-failure path in googleClient.ts.
+
+    const res = await request(app)
+      .post(`/api/v1/tenants/${TENANT_A}/projects/${PROJECT_1}/integrations/google/health-check`)
+      .set("X-Dev-User-Id", USER_1);
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe("error");
+    expect(res.body.detail).toMatch(/API key/i);
   });
 });

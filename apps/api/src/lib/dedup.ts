@@ -164,6 +164,215 @@ export async function findDuplicateOrganization(
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// Fuzzy name-similarity (tier 2 dedup)
+//
+// Ported from milestone3-phase2 (apps/api/src/lib/dedup.ts, Track 2) as an
+// ADDITION alongside the exact-match tier above, not a replacement of it. The
+// exact-normalized matching above already catches a surprising amount of
+// near-miss cases "for free" — normalizeOrgName() strips legal suffixes and
+// punctuation, so "Acme Inc." and "Acme, Incorporated" both normalize to the
+// same "acme" string and match EXACTLY, no fuzzy logic required. The real
+// gap exact matching cannot close:
+//   - Same company, genuinely different domain strings that aren't a simple
+//     www./protocol variant (e.g. "acme.com" vs "acme.io" — a company that
+//     operates two TLDs, or a connector that resolved a redirect/alias
+//     domain) — normalizeDomain() correctly treats these as different
+//     domains (they ARE different domains), so the domain tier naturally
+//     misses this and falls through to the name tier.
+//   - Same company, name strings that differ by more than a legal suffix —
+//     a dropped/added word ("Acme Technologies" vs "Acme Tech"), a leading
+//     article ("The Weather Company" vs "Weather Company"), a minor
+//     misspelling/typo a human or OCR-ish source introduced.
+// For these, this module never auto-merges — only a human can confirm two
+// genuinely different name strings refer to the same real company. Instead,
+// findPossibleDuplicateOrganization() below runs ONLY after the exact tier
+// (findDuplicateOrganization, domain then normalized name) has already
+// missed, and flags a conservative fuzzy match via the `possible_duplicate_of`
+// column (see packages/db/migrations/441_add_possible_duplicate_to_discovered_organizations.sql)
+// for human review in the dashboard — it is never treated as a duplicate for
+// skip-insert purposes the way findDuplicateOrganization's exact matches are.
+// HARD REQUIREMENT: nothing in this section may auto-merge or write a merge
+// on its own; see "flag-only, never auto-merge" test coverage in
+// apps/api/test/dedup.test.ts.
+// ---------------------------------------------------------------------------
+
+/**
+ * Classic Levenshtein (single-character insert/delete/substitute) edit
+ * distance, O(a.length * b.length) time and O(b.length) space (rolling two
+ * rows rather than a full matrix). No new dependency — this is the entire
+ * well-known algorithm, not a stub.
+ */
+export function levenshteinDistance(a: string, b: string): number {
+  if (a === b) return 0;
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+
+  let prevRow = new Array<number>(b.length + 1);
+  let currRow = new Array<number>(b.length + 1);
+  for (let j = 0; j <= b.length; j++) prevRow[j] = j;
+
+  for (let i = 1; i <= a.length; i++) {
+    currRow[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const substitutionCost = a[i - 1] === b[j - 1] ? 0 : 1;
+      currRow[j] = Math.min(
+        currRow[j - 1] + 1, // insertion
+        prevRow[j] + 1, // deletion
+        prevRow[j - 1] + substitutionCost, // substitution
+      );
+    }
+    [prevRow, currRow] = [currRow, prevRow];
+  }
+
+  return prevRow[b.length];
+}
+
+/** Levenshtein distance normalized into a 0-1 similarity (1 = identical). */
+function levenshteinSimilarity(a: string, b: string): number {
+  const maxLen = Math.max(a.length, b.length);
+  if (maxLen === 0) return 1;
+  return 1 - levenshteinDistance(a, b) / maxLen;
+}
+
+/**
+ * Jaccard similarity over whitespace-separated word tokens: catches
+ * word-reordering / a single dropped-or-added word ("Acme Global Robotics"
+ * vs "Global Acme Robotics", or "Acme Robotics" vs "Acme Robotics Inc" —
+ * though the latter is normally already handled by normalizeOrgName's suffix
+ * stripping before this is ever reached) better than a pure edit-distance
+ * score would, since Levenshtein penalizes a whole reordered/inserted word
+ * heavily even though it's a weak signal of a genuinely different company.
+ */
+function tokenOverlapSimilarity(a: string, b: string): number {
+  const tokensA = new Set(a.split(/\s+/).filter(Boolean));
+  const tokensB = new Set(b.split(/\s+/).filter(Boolean));
+  if (tokensA.size === 0 || tokensB.size === 0) return 0;
+
+  let intersectionSize = 0;
+  for (const token of tokensA) {
+    if (tokensB.has(token)) intersectionSize += 1;
+  }
+  const unionSize = new Set([...tokensA, ...tokensB]).size;
+  return unionSize === 0 ? 0 : intersectionSize / unionSize;
+}
+
+/**
+ * Combined 0-1 similarity score for two already-normalized org names: the
+ * better (higher) of character-level (Levenshtein) and word-level (token
+ * Jaccard) similarity, so either a typo-level difference OR a
+ * word-reordering/minor-word difference can earn a high score without
+ * requiring both signals to agree. Exported for direct unit testing.
+ */
+export function orgNameSimilarity(a: string, b: string): number {
+  if (a.length === 0 || b.length === 0) return 0;
+  if (a === b) return 1;
+  return Math.max(levenshteinSimilarity(a, b), tokenOverlapSimilarity(a, b));
+}
+
+/**
+ * Conservative on purpose: this threshold only ever gates a "flag for human
+ * review" outcome, never an auto-merge, but a threshold that's too low would
+ * flood the review queue with unrelated companies that happen to share a
+ * common word ("Acme Consulting" vs "Beta Consulting"). 0.82 requires names
+ * to be a near-miss (a handful of character edits, or nearly all words
+ * shared), not merely related.
+ */
+const FUZZY_ORG_NAME_MATCH_THRESHOLD = 0.82;
+
+/**
+ * Minimum normalized-name length considered for fuzzy matching. Very short
+ * normalized names (e.g. "co", "abc") produce noisy, high-similarity-by-
+ * coincidence scores against unrelated short names, so they're excluded
+ * from the fuzzy tier entirely (exact matching still applies to them).
+ */
+const FUZZY_ORG_NAME_MIN_LENGTH = 4;
+
+/**
+ * True when two normalized org names are similar enough to flag as a
+ * possible duplicate, but NOT identical (identical strings are already
+ * caught by findDuplicateOrganization's exact-match tier, and this is only
+ * ever meant to run after that tier has already missed).
+ */
+export function isFuzzyOrgNameMatch(normalizedA: string, normalizedB: string): boolean {
+  if (!normalizedA || !normalizedB) return false;
+  if (normalizedA === normalizedB) return false;
+  if (normalizedA.length < FUZZY_ORG_NAME_MIN_LENGTH || normalizedB.length < FUZZY_ORG_NAME_MIN_LENGTH) return false;
+  return orgNameSimilarity(normalizedA, normalizedB) >= FUZZY_ORG_NAME_MATCH_THRESHOLD;
+}
+
+/** Bound on how many existing organizations are pulled back as fuzzy-match
+ * candidates for one new organization — this scores candidates in JS
+ * (Levenshtein isn't a built-in SQL operator, and adding a Postgres
+ * extension like pg_trgm is out of scope here), so it has to stay bounded
+ * rather than scanning an unbounded table. Newest-first so an active
+ * project's recent discovery runs (the likeliest source of a near-duplicate
+ * from a second provider in the same campaign) are favored over old
+ * archived rows once a project has more than this many organizations. */
+const FUZZY_CANDIDATE_SCAN_LIMIT = 500;
+
+/**
+ * Tier-2 dedup check: looks for an existing discovered_organizations row
+ * whose normalized name is a close-but-not-exact match (see
+ * isFuzzyOrgNameMatch) to the given organization, within the same
+ * tenant+project. Callers MUST only invoke this after findDuplicateOrganization
+ * has already returned null for the same input — this never re-checks for an
+ * exact match, and a result here is never treated as a confirmed duplicate:
+ * it is surfaced to callers purely so they can record it as
+ * `possible_duplicate_of` for a human to review, never to skip an insert or
+ * silently merge two rows. Returns the single best-scoring candidate above
+ * the threshold (or null if none clears it).
+ *
+ * This function never writes to the database and never merges rows — it
+ * only reads candidates and returns a match for the CALLER to decide what to
+ * do with (e.g. set `possible_duplicate_of` on insert). It must stay that
+ * way: flag-only, never auto-merge.
+ */
+export async function findPossibleDuplicateOrganization(
+  tenantDb: Pick<PoolClient, "query">,
+  projectId: string,
+  org: { name?: string | null },
+  excludeOrganizationId?: string,
+): Promise<DuplicateOrganizationMatch | null> {
+  const normalizedName = normalizeOrgName(org.name);
+  if (!normalizedName || normalizedName.length < FUZZY_ORG_NAME_MIN_LENGTH) return null;
+
+  const candidates = await tenantDb.query(
+    `SELECT id, name, domain, normalized_name FROM discovered_organizations
+     WHERE project_id = $1 AND normalized_name IS NOT NULL AND id != COALESCE($2, '00000000-0000-0000-0000-000000000000'::uuid)
+     ORDER BY discovered_at DESC
+     LIMIT ${FUZZY_CANDIDATE_SCAN_LIMIT}`,
+    [projectId, excludeOrganizationId ?? null],
+  );
+
+  let best: (DuplicateOrganizationMatch & { normalized_name: string }) | null = null;
+  let bestScore = 0;
+  for (const row of candidates.rows as (DuplicateOrganizationMatch & { normalized_name: string })[]) {
+    if (!isFuzzyOrgNameMatch(normalizedName, row.normalized_name)) continue;
+    const score = orgNameSimilarity(normalizedName, row.normalized_name);
+    if (score > bestScore) {
+      bestScore = score;
+      best = row;
+    }
+  }
+
+  if (!best) return null;
+  return { id: best.id, name: best.name, domain: best.domain };
+}
+
+/**
+ * Normalizes a person's name for fuzzy-ish exact matching: lowercase, trim,
+ * collapse internal whitespace. Mirrors normalizeOrgName/normalizeDomain's
+ * normalize-before-compare approach — a contact name has no dedicated
+ * `normalized_name` column (unlike discovered_organizations.normalized_name
+ * or discovered_contacts.normalized_email), so this is applied at query time
+ * on both sides of the comparison instead.
+ */
+export function normalizeContactName(input: string | null | undefined): string {
+  if (!input || typeof input !== "string") return "";
+  return input.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
 /**
  * Normalizes a person's name for fuzzy-ish exact matching: lowercase, trim,
  * collapse internal whitespace. Mirrors normalizeOrgName/normalizeDomain's

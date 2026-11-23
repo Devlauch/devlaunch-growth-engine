@@ -144,6 +144,7 @@ describe("persistDiscoveryResult", () => {
       { rowCount: 0, rows: [] }, // findDuplicateOrganization: by domain
       { rowCount: 0, rows: [] }, // findDuplicateOrganization: by name fallback
       { rowCount: 1, rows: [{ id: ORG_1, name: "Acme Inc", domain: "acme.com" }] }, // INSERT discovered_organizations
+      { rowCount: 0, rows: [] }, // getIntegrationCredential (apollo) -- no tenant credential configured
       { rowCount: 1, rows: [{ id: "dmc-1", status: "not_configured" }] }, // decision_maker_cache upsert
     ]);
 
@@ -170,6 +171,7 @@ describe("persistDiscoveryResult", () => {
       { rowCount: 0, rows: [] },
       { rowCount: 0, rows: [] },
       { rowCount: 1, rows: [{ id: ORG_1, name: "Acme Inc", domain: "acme.com" }] },
+      { rowCount: 0, rows: [] }, // getIntegrationCredential (apollo) -- no tenant credential configured
       { rowCount: 1, rows: [{ id: "dmc-1", status: "not_configured" }] },
     ]);
 

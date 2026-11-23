@@ -1694,3 +1694,35 @@ tests passing; `apps/worker` 18/18 files / 112/112 tests passing; `apps/dashboar
 tsc clean + production build succeeds. No real external provider calls were
 exercised (no credentials in this environment) — every such path reports
 `not_configured`/`BLOCKED` honestly.
+## Milestone 3 Phase 2 Selective Reconciliation (2026-11-23)
+
+**Apollo** and **Google (Custom Search)** added to `REAL_PROVIDERS` in
+`routes/integrations.ts`. Both resolve credentials through the existing shared
+path only — `apps/api/src/lib/providerCredentials.ts` wraps
+`integrationCredentials.ts#getIntegrationCredential` (itself the only consumer of
+`credentialEncryption.ts` outside `routes/integrations.ts`), same convention as
+Hunter's own `resolveHunterApiKey`. No parallel/duplicate credential system was
+introduced. New `apolloClient.ts`/`googleClient.ts` health-check adapters follow
+the existing generic health-check route's pattern (same one listmonk/chatwoot/
+postiz/hunter already use) — a provider with no resolvable credential reports an
+honest not-configured/blocked status, never connected.
+
+`ApolloDecisionMakerProvider` is now actually referenced by
+`decisionMakerProvider.ts`'s production waterfall (it was ported but unused until
+this reconciliation's own orchestrator follow-up closed that gap — see
+`docs/PHASE_2_SELECTIVE_RECONCILIATION_REPORT.md` §5). `GoogleSearchConnector`
+remains unable to use this credential path — it lives in `packages/agent-sdk`,
+which architecturally cannot import `apps/api`'s credential system (documented in
+the file's own comment); it still falls back to reading `process.env` directly in
+`registry.ts`. This is a known, scoped gap, not an oversight — fixing it needs a
+registry/dependency-injection redesign out of this pass's scope.
+
+No Apollo-specific `usage_events` event type exists yet — Apollo calls are made
+but not separately metered. Documented honestly in the new
+`providerCostReporting.ts`'s `notTracked` output, not invented or silently
+defaulted to zero cost.
+
+No real external call was made to Apollo, Google, or any other provider during
+this reconciliation — no real credentials exist in this environment. All
+verification is mock-based, consistent with this file's own established
+discipline throughout.

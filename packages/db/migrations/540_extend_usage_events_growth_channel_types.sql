@@ -46,12 +46,19 @@
 -- No code path writes any of these with a fabricated/estimated quantity —
 -- if a provider has no credential configured, its NotConfigured* stub
 -- throws before any usage_events row is ever written for that call.
+--
+-- PATCHED (Phase 2 merge reconciliation, orchestrator): same full-list-
+-- rewrite sequencing issue as 530's own patched comment describes —
+-- 'google_search_call' (migration 446) carried forward here too so it
+-- survives this migration running after it. Never applied to any shared
+-- database before this fix.
 
 ALTER TABLE usage_events DROP CONSTRAINT usage_events_event_type_check;
 ALTER TABLE usage_events ADD CONSTRAINT usage_events_event_type_check
   CHECK (event_type IN (
     'agent_run', 'api_request', 'lead_captured', 'ai_tokens',
     'hunter_api_request', 'hunter_discovery', 'hunter_verification', 'hunter_request_failed',
+    'google_search_call',
     'llm_tokens_input', 'llm_tokens_output',
     'serp_api_request', 'serp_request_failed',
     'clearbit_api_request', 'clearbit_request_failed',
@@ -67,5 +74,6 @@ ALTER TABLE usage_events ADD CONSTRAINT usage_events_event_type_check
   CHECK (event_type IN (
     'agent_run', 'api_request', 'lead_captured', 'ai_tokens',
     'hunter_api_request', 'hunter_discovery', 'hunter_verification', 'hunter_request_failed',
+    'google_search_call',
     'llm_tokens_input', 'llm_tokens_output'
   ));

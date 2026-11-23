@@ -18,12 +18,19 @@ import { assertActiveTenantMember } from "./salesPipeline.js";
  * already used throughout this codebase (analytics.ts, growthRevenueAnalytics
  * .ts, funnelDropoff.ts, reportGenerator.ts, nextBestAction.ts) rather than
  * inventing a new one: a lead is CRM-ready when leads.status = 'qualified'
- * (a human already marked it so) OR its lead_scores.total_score crosses
- * QUALIFIED_SCORE_THRESHOLD (=50, the same constant value — kept as its own
- * local copy since each of those call sites also duplicates it locally
- * rather than share a cross-file import, an existing, deliberate convention
- * in this codebase for small pure constants — see scoreLead.ts's header
- * comment for the identical reasoning applied to a whole function).
+ * (a human already marked it so) OR its lead_scores.total_score crosses the
+ * qualification threshold (default QUALIFIED_SCORE_THRESHOLD = 50, the same
+ * constant value those other call sites also duplicate locally — an
+ * existing, deliberate convention in this codebase for small pure constants,
+ * see scoreLead.ts's header comment for the identical reasoning applied to a
+ * whole function). Ported from milestone3-phase2: a project can override
+ * this default via a `qualification_settings.min_score_to_qualify` row
+ * (packages/db/migrations/443_create_qualification_settings.sql,
+ * apps/api/src/routes/qualificationSettings.ts) — see
+ * getQualificationThreshold() below. Only the THRESHOLD SOURCE is
+ * configurable; the reason taxonomy (status_qualified / score_threshold /
+ * not_qualified) and every other call site's own copy of the constant are
+ * unchanged by this.
  *
  * Promotion does three real things, each idempotent (safe to call again for
  * the same lead without duplicating data):
@@ -73,16 +80,52 @@ export interface QualificationResult {
   totalScore: number | null;
 }
 
-/** Pure — no DB access. Reuses the existing codebase-wide qualification rule. */
-export function evaluateQualification(lead: Pick<LeadRow, "status">, score: LeadScoreRow | null): QualificationResult {
+/**
+ * Pure — no DB access. Reuses the existing codebase-wide qualification
+ * rule. `threshold` defaults to QUALIFIED_SCORE_THRESHOLD (this function's
+ * behavior for any caller that doesn't pass one is byte-for-byte unchanged
+ * from before qualification_settings existed) but callers that want a
+ * project's configured threshold should resolve it first via
+ * getQualificationThreshold() and pass it in here.
+ */
+export function evaluateQualification(
+  lead: Pick<LeadRow, "status">,
+  score: LeadScoreRow | null,
+  threshold: number = QUALIFIED_SCORE_THRESHOLD,
+): QualificationResult {
   const totalScore = score ? Number(score.total_score) : null;
   if (lead.status === "qualified") {
-    return { met: true, reason: "status_qualified", threshold: QUALIFIED_SCORE_THRESHOLD, totalScore };
+    return { met: true, reason: "status_qualified", threshold, totalScore };
   }
-  if (totalScore !== null && totalScore >= QUALIFIED_SCORE_THRESHOLD) {
-    return { met: true, reason: "score_threshold", threshold: QUALIFIED_SCORE_THRESHOLD, totalScore };
+  if (totalScore !== null && totalScore >= threshold) {
+    return { met: true, reason: "score_threshold", threshold, totalScore };
   }
-  return { met: false, reason: "not_qualified", threshold: QUALIFIED_SCORE_THRESHOLD, totalScore };
+  return { met: false, reason: "not_qualified", threshold, totalScore };
+}
+
+/**
+ * Resolves the qualification threshold to use for this project:
+ * `qualification_settings.min_score_to_qualify` when a project has
+ * configured one, otherwise QUALIFIED_SCORE_THRESHOLD — never an error,
+ * never left undefined. This is the ONLY place that reads
+ * qualification_settings for the promotion-gating decision; it never
+ * writes to leads/deals and never auto-creates anything — it just answers
+ * "what number should evaluateQualification compare against for this
+ * project."
+ */
+export async function getQualificationThreshold(
+  tenantDb: PoolClient,
+  tenantId: string,
+  projectId: string,
+): Promise<number> {
+  const result = await tenantDb.query<{ min_score_to_qualify: number }>(
+    `SELECT min_score_to_qualify FROM qualification_settings WHERE tenant_id = $1 AND project_id = $2`,
+    [tenantId, projectId],
+  );
+  if (result.rowCount && result.rowCount > 0) {
+    return Number(result.rows[0].min_score_to_qualify);
+  }
+  return QUALIFIED_SCORE_THRESHOLD;
 }
 
 export interface CompanyLinkResult {

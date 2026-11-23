@@ -68,6 +68,7 @@ async function loadOrganizationOr404(req: Request, organizationId: string) {
  */
 async function lookupAndCacheDecisionMakers(
   req: Request,
+  projectId: string,
   organizationId: string,
   organizationName: string,
   domain: string | null,
@@ -75,6 +76,7 @@ async function lookupAndCacheDecisionMakers(
   return sharedLookupAndCacheDecisionMakers(
     req.tenantDb!,
     req.tenantId as string,
+    projectId,
     organizationId,
     organizationName,
     domain,
@@ -475,8 +477,45 @@ const createDiscoveredOrganizationSchema = z.object({
   sourceConfidence: sourceConfidenceSchema.optional(),
 });
 
+/**
+ * Prospect quality filters, following priorityQueue.ts's existing
+ * status/minScore query-param validation pattern (coerced/validated zod
+ * query schema, conditions/values arrays built up only for the filters
+ * actually supplied) rather than inventing a new one:
+ *   - status: the existing discovered_organizations.status enum.
+ *   - sourceConfidence: how the row's data was obtained (268_add_prospect_
+ *     discovery_fields.sql's existing 3-way enum).
+ *   - provider: the discovery_sources.connector_type that found this
+ *     organization (requires a LEFT JOIN — see below). Organizations
+ *     created via the manual-create route with no discoverySourceId never
+ *     match a provider filter, which is honest (they have no provider).
+ *   - minLeadScore: only organizations whose promoted lead (if any) has a
+ *     lead_scores.total_score >= this value. An organization with no
+ *     promoted lead, or a promoted lead with no score yet, never satisfies
+ *     a minLeadScore filter — same NULLS-never-match-a->=-threshold honesty
+ *     as priorityQueue.ts's minScore.
+ *
+ * Deliberately NOT implemented:
+ *   - An employee-count range filter. Direct inspection of
+ *     packages/agent-sdk/src/connectors/apolloConnector.ts and
+ *     googleSearchConnector.ts confirms neither ever writes an employee
+ *     count/range into a result's raw_metadata (Apollo's `employeeRanges`
+ *     is only ever used as an outbound search FILTER parameter, never
+ *     echoed back per company; the public-directory/Overpass connector has
+ *     no such concept at all). Building a query-param filter against a
+ *     field that is never actually populated would silently return zero
+ *     results forever — exactly the kind of fabricated capability this
+ *     codebase's honesty rules forbid — so it's left unimplemented rather
+ *     than faked.
+ *   - hasPossibleDuplicate (filtering by a possible-duplicate flag): that
+ *     flag, if/when it lands, belongs to the fuzzy-dedup work tracked
+ *     separately in lib/dedup.ts — not this change.
+ */
 const listDiscoveredOrganizationsQuerySchema = z.object({
   status: organizationStatusSchema.optional(),
+  sourceConfidence: sourceConfidenceSchema.optional(),
+  provider: z.string().trim().min(1).max(100).optional(),
+  minLeadScore: z.coerce.number().min(0).max(100).optional(),
   page: z.coerce.number().int().positive().optional().default(1),
   pageSize: z.coerce.number().int().positive().max(200).optional().default(50),
 });
@@ -494,6 +533,18 @@ discoveredOrganizationsRouter.get("/", async (req, res, next) => {
       values.push(query.status);
       conditions.push(`o.status = $${values.length}`);
     }
+    if (query.sourceConfidence) {
+      values.push(query.sourceConfidence);
+      conditions.push(`o.source_confidence = $${values.length}`);
+    }
+    if (query.provider) {
+      values.push(query.provider);
+      conditions.push(`ds.connector_type = $${values.length}`);
+    }
+    if (query.minLeadScore !== undefined) {
+      values.push(query.minLeadScore);
+      conditions.push(`ls.total_score >= $${values.length}`);
+    }
 
     const limit = query.pageSize;
     const offset = (query.page - 1) * query.pageSize;
@@ -501,7 +552,13 @@ discoveredOrganizationsRouter.get("/", async (req, res, next) => {
 
     // Embeds each organization's contacts directly (coalesced to '[]' for
     // orgs with none) so the dashboard's list view doesn't need N follow-up
-    // requests to /:id/contacts.
+    // requests to /:id/contacts. LEFT JOINs discovery_sources (for the
+    // `provider` filter) and leads+lead_scores (for `minLeadScore`) — a
+    // promoted lead has no direct FK back to the discovered_organizations
+    // row it came from (see promote-to-lead's own doc comment on this known
+    // gap), so the join goes through leads.custom_fields's
+    // discoveredOrganizationId, the same provenance key promote-to-lead
+    // itself writes.
     const result = await req.tenantDb!.query(
       `SELECT o.*,
               COALESCE(
@@ -511,6 +568,9 @@ discoveredOrganizationsRouter.get("/", async (req, res, next) => {
                 '[]'::json
               ) AS contacts
        FROM discovered_organizations o
+       LEFT JOIN discovery_sources ds ON ds.id = o.discovery_source_id
+       LEFT JOIN leads l ON l.tenant_id = o.tenant_id AND l.custom_fields ->> 'discoveredOrganizationId' = o.id::text
+       LEFT JOIN lead_scores ls ON ls.lead_id = l.id
        WHERE ${conditions.join(" AND ")}
        ORDER BY o.discovered_at DESC
        LIMIT $${values.length - 1} OFFSET $${values.length}`,
@@ -591,6 +651,97 @@ discoveredOrganizationsRouter.get("/export", async (req, res, next) => {
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename="discovered-organizations-${projectId}.csv"`);
     res.status(200).send(csv);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** discovered_contacts.verification_status's own CHECK-constraint enum
+ * (028_create_discovered_contacts.sql) — the column every contact-ingestion
+ * path in this file (connector runs, manual create, the /verify waterfall)
+ * already writes a real value into, so filtering against it (rather than
+ * against the richer-but-inconsistently-shaped email_verification jsonb
+ * blob) is the honest, always-queryable choice. */
+const contactVerificationStatusSchema = z.enum(["verified", "unverified", "role_based", "risky", "invalid"]);
+
+const listDiscoveredContactsQuerySchema = z.object({
+  verificationStatus: contactVerificationStatusSchema.optional(),
+  sourceConfidence: sourceConfidenceSchema.optional(),
+  organizationStatus: organizationStatusSchema.optional(),
+  minLeadScore: z.coerce.number().min(0).max(100).optional(),
+  page: z.coerce.number().int().positive().optional().default(1),
+  pageSize: z.coerce.number().int().positive().max(200).optional().default(50),
+});
+
+/**
+ * GET /discovered-organizations/contacts
+ *
+ * Cross-organization contact listing with quality filters — before this,
+ * the only contact-listing route was GET /:id/contacts (one organization at
+ * a time), which has no way to, say, "show me every risky/unverified
+ * contact across this whole project" for a bulk-review pass. Joins back to
+ * discovered_organizations for context (name/domain/status) the same way
+ * the CSV export's contacts path already does. minLeadScore follows the
+ * same leads.custom_fields-based join as the organizations list above,
+ * keyed by discoveredContactId this time (the more specific of the two
+ * provenance keys promote-to-lead writes).
+ *
+ * Deliberately NOT implemented: a sourceProvider filter. Unlike the
+ * phase2-isolated worktree this was ported from, master's
+ * discovered_contacts table (028_create_discovered_contacts.sql) has no
+ * source_provider column — the closest real equivalent is the organization-
+ * level discovery_sources.connector_type, already covered by the
+ * organizations-list route's own `provider` filter. Faking a per-contact
+ * provider filter against a column that doesn't exist here would be the
+ * same kind of fabricated capability the employee-count filter above was
+ * deliberately left out for.
+ */
+discoveredOrganizationsRouter.get("/contacts", async (req, res, next) => {
+  try {
+    const projectId = paramId(req, "projectId");
+    await assertProjectInTenant(req, projectId);
+    const query = listDiscoveredContactsQuerySchema.parse(req.query);
+
+    const conditions = ["c.tenant_id = $1", "o.project_id = $2"];
+    const values: unknown[] = [req.tenantId, projectId];
+    if (query.verificationStatus) {
+      values.push(query.verificationStatus);
+      conditions.push(`c.verification_status = $${values.length}`);
+    }
+    if (query.sourceConfidence) {
+      values.push(query.sourceConfidence);
+      conditions.push(`c.source_confidence = $${values.length}`);
+    }
+    if (query.organizationStatus) {
+      values.push(query.organizationStatus);
+      conditions.push(`o.status = $${values.length}`);
+    }
+    if (query.minLeadScore !== undefined) {
+      values.push(query.minLeadScore);
+      conditions.push(`ls.total_score >= $${values.length}`);
+    }
+
+    const limit = query.pageSize;
+    const offset = (query.page - 1) * query.pageSize;
+    values.push(limit, offset);
+
+    const result = await req.tenantDb!.query(
+      `SELECT c.*, o.name AS organization_name, o.domain AS organization_domain, o.status AS organization_status
+       FROM discovered_contacts c
+       JOIN discovered_organizations o ON o.id = c.organization_id
+       LEFT JOIN leads l ON l.tenant_id = c.tenant_id AND l.custom_fields ->> 'discoveredContactId' = c.id::text
+       LEFT JOIN lead_scores ls ON ls.lead_id = l.id
+       WHERE ${conditions.join(" AND ")}
+       ORDER BY c.created_at DESC
+       LIMIT $${values.length - 1} OFFSET $${values.length}`,
+      values,
+    );
+
+    res.json({
+      discoveredContacts: result.rows,
+      page: query.page,
+      pageSize: query.pageSize,
+    });
   } catch (err) {
     next(err);
   }
@@ -688,6 +839,7 @@ discoveredOrganizationsRouter.post("/:id/decision-makers", async (req, res, next
 
     const cacheRow = await lookupAndCacheDecisionMakers(
       req,
+      projectId,
       organizationId,
       organization.name as string,
       (organization.domain as string | null) ?? null,
@@ -835,6 +987,93 @@ export function rankContactsForPromotion<
 }
 
 /**
+ * Core promote-to-lead logic, shared between the single-item route (below)
+ * and the bulk-promote route (further below) so the bulk path is a real
+ * per-item reuse of this exact logic in a loop, not a parallel
+ * reimplementation that could silently drift from the single-item behavior.
+ * Throws an HttpError (via Errors.*) on any validation/conflict failure —
+ * callers decide whether that aborts the whole request (single-item route)
+ * or is caught and recorded as one item's failure (bulk route).
+ */
+async function promoteOrganizationToLead(
+  req: Request,
+  projectId: string,
+  organizationId: string,
+  discoveredContactId?: string,
+): Promise<{ lead: Record<string, unknown>; organization: Record<string, unknown> }> {
+  const organization = await loadOrganizationOr404(req, organizationId);
+  if (organization.project_id !== projectId) throw Errors.notFound("Discovered organization not found");
+
+  if (organization.status !== "new") {
+    throw Errors.conflict(
+      `This organization has already been ${organization.status === "researched" ? "promoted to a lead" : organization.status} — it can only be promoted from status "new".`,
+    );
+  }
+
+  let contact: Record<string, unknown> | null = null;
+  if (discoveredContactId) {
+    const specific = await req.tenantDb!.query(
+      `SELECT * FROM discovered_contacts WHERE id = $1 AND organization_id = $2 AND tenant_id = $3`,
+      [discoveredContactId, organizationId, req.tenantId],
+    );
+    if (specific.rowCount === 0) throw Errors.badRequest("discoveredContactId does not belong to this organization");
+    contact = specific.rows[0];
+  } else {
+    const contactsResult = await req.tenantDb!.query(
+      `SELECT * FROM discovered_contacts WHERE organization_id = $1 AND tenant_id = $2`,
+      [organizationId, req.tenantId],
+    );
+    const ranked = rankContactsForPromotion(
+      contactsResult.rows as { verification_status: string; contact_channel: string; created_at: string }[],
+    );
+    contact = ranked[0] ?? null;
+  }
+
+  const leadName = (contact?.name as string | undefined) ?? organization.name;
+  const leadEmail = (contact?.email as string | undefined) ?? null;
+
+  const leadResult = await req.tenantDb!.query(
+    `INSERT INTO leads (tenant_id, project_id, name, email, company, message, custom_fields, source, status, origin)
+     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, 'discovery', 'new', $8)
+     RETURNING id, tenant_id, project_id, name, email, company, message, custom_fields, source, status, origin, created_at`,
+    [
+      req.tenantId,
+      projectId,
+      leadName,
+      leadEmail,
+      organization.domain ?? organization.name,
+      contact?.role_title ? `Role: ${contact.role_title}` : null,
+      JSON.stringify({
+        discoveredOrganizationId: organizationId,
+        discoveredContactId: contact?.id ?? null,
+        discoverySourceId: organization.discovery_source_id ?? null,
+        sourceUrl: organization.source_url,
+      }),
+      organization.source_url,
+    ],
+  );
+  const lead = leadResult.rows[0];
+
+  const updatedOrg = await req.tenantDb!.query(
+    `UPDATE discovered_organizations SET status = 'researched' WHERE id = $1 AND tenant_id = $2 RETURNING *`,
+    [organizationId, req.tenantId],
+  );
+
+  await req.tenantDb!.query(
+    `INSERT INTO audit_events (tenant_id, actor_type, actor_user_id, action, entity_type, entity_id, metadata)
+     VALUES ($1, 'user', $2, 'lead.promoted_from_discovery', 'lead', $3, $4::jsonb)`,
+    [
+      req.tenantId,
+      req.userId,
+      lead.id,
+      JSON.stringify({ discoveredOrganizationId: organizationId, discoveredContactId: contact?.id ?? null }),
+    ],
+  );
+
+  return { lead, organization: updatedOrg.rows[0] };
+}
+
+/**
  * POST /discovered-organizations/:id/promote-to-lead
  *
  * Creates a real row in the existing `leads` table (packages/db/migrations
@@ -848,78 +1087,90 @@ discoveredOrganizationsRouter.post("/:id/promote-to-lead", async (req, res, next
     const projectId = paramId(req, "projectId");
     const organizationId = paramId(req, "id");
     await assertProjectInTenant(req, projectId);
-    const organization = await loadOrganizationOr404(req, organizationId);
-    if (organization.project_id !== projectId) throw Errors.notFound("Discovered organization not found");
-
-    if (organization.status !== "new") {
-      throw Errors.conflict(
-        `This organization has already been ${organization.status === "researched" ? "promoted to a lead" : organization.status} — it can only be promoted from status "new".`,
-      );
-    }
-
     const body = promoteToLeadSchema.parse(req.body ?? {});
 
-    let contact: Record<string, unknown> | null = null;
-    if (body.discoveredContactId) {
-      const specific = await req.tenantDb!.query(
-        `SELECT * FROM discovered_contacts WHERE id = $1 AND organization_id = $2 AND tenant_id = $3`,
-        [body.discoveredContactId, organizationId, req.tenantId],
-      );
-      if (specific.rowCount === 0) throw Errors.badRequest("discoveredContactId does not belong to this organization");
-      contact = specific.rows[0];
-    } else {
-      const contactsResult = await req.tenantDb!.query(
-        `SELECT * FROM discovered_contacts WHERE organization_id = $1 AND tenant_id = $2`,
-        [organizationId, req.tenantId],
-      );
-      const ranked = rankContactsForPromotion(
-        contactsResult.rows as { verification_status: string; contact_channel: string; created_at: string }[],
-      );
-      contact = ranked[0] ?? null;
+    const { lead, organization } = await promoteOrganizationToLead(
+      req,
+      projectId,
+      organizationId,
+      body.discoveredContactId,
+    );
+
+    res.status(201).json({ lead, organization });
+  } catch (err) {
+    next(err);
+  }
+});
+
+const bulkPromoteToLeadSchema = z.object({
+  items: z
+    .array(
+      z.object({
+        organizationId: z.string().uuid(),
+        discoveredContactId: z.string().uuid().optional(),
+      }),
+    )
+    .min(1)
+    .max(200),
+});
+
+interface BulkPromoteItemResult {
+  organizationId: string;
+  success: boolean;
+  leadId?: string;
+  error?: string;
+}
+
+/**
+ * POST /discovered-organizations/bulk-promote
+ *
+ * Bulk prospect review -> CRM import: the dashboard's multi-select
+ * "promote selected organizations" action. Reuses promoteOrganizationToLead's
+ * exact logic per item, in a loop — the same validation, best-available-
+ * contact ranking, lead insert, org status update, and audit-event write the
+ * single-item route above performs, just repeated once per selected
+ * organization.
+ *
+ * Deliberately best-effort per item, NOT one wrapped transaction: a batch of
+ * 50 selected organizations where one has already been promoted (409) or
+ * belongs to a different project (404) should still promote the other 49 —
+ * wrapping the whole batch in one transaction would mean a single bad item
+ * silently rolls back every other item's real, otherwise-successful
+ * promotion, which is a worse and more confusing outcome for a human doing a
+ * bulk review pass than an honest per-item result list. Every item's
+ * individual DB writes (lead insert, org status update, audit event) are
+ * still atomic on their own via promoteOrganizationToLead's sequential
+ * awaits against the one request-scoped client.
+ *
+ * Never throws for an individual item's failure — each item gets its own
+ * `{ organizationId, success, leadId? | error? }` entry in the response, so
+ * the caller can honestly show "47 promoted, 3 failed: <reasons>" rather
+ * than either a fabricated all-success or an all-or-nothing 4xx/5xx that
+ * hides which 47 actually worked.
+ */
+discoveredOrganizationsRouter.post("/bulk-promote", async (req, res, next) => {
+  try {
+    const projectId = paramId(req, "projectId");
+    await assertProjectInTenant(req, projectId);
+    const body = bulkPromoteToLeadSchema.parse(req.body);
+
+    const results: BulkPromoteItemResult[] = [];
+    for (const item of body.items) {
+      try {
+        const { lead } = await promoteOrganizationToLead(req, projectId, item.organizationId, item.discoveredContactId);
+        results.push({ organizationId: item.organizationId, success: true, leadId: lead.id as string });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Could not promote this organization to a lead.";
+        results.push({ organizationId: item.organizationId, success: false, error: message });
+      }
     }
 
-    const leadName = (contact?.name as string | undefined) ?? organization.name;
-    const leadEmail = (contact?.email as string | undefined) ?? null;
-
-    const leadResult = await req.tenantDb!.query(
-      `INSERT INTO leads (tenant_id, project_id, name, email, company, message, custom_fields, source, status, origin)
-       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, 'discovery', 'new', $8)
-       RETURNING id, tenant_id, project_id, name, email, company, message, custom_fields, source, status, origin, created_at`,
-      [
-        req.tenantId,
-        projectId,
-        leadName,
-        leadEmail,
-        organization.domain ?? organization.name,
-        contact?.role_title ? `Role: ${contact.role_title}` : null,
-        JSON.stringify({
-          discoveredOrganizationId: organizationId,
-          discoveredContactId: contact?.id ?? null,
-          discoverySourceId: organization.discovery_source_id ?? null,
-          sourceUrl: organization.source_url,
-        }),
-        organization.source_url,
-      ],
-    );
-    const lead = leadResult.rows[0];
-
-    const updatedOrg = await req.tenantDb!.query(
-      `UPDATE discovered_organizations SET status = 'researched' WHERE id = $1 AND tenant_id = $2 RETURNING *`,
-      [organizationId, req.tenantId],
-    );
-
-    await req.tenantDb!.query(
-      `INSERT INTO audit_events (tenant_id, actor_type, actor_user_id, action, entity_type, entity_id, metadata)
-       VALUES ($1, 'user', $2, 'lead.promoted_from_discovery', 'lead', $3, $4::jsonb)`,
-      [
-        req.tenantId,
-        req.userId,
-        lead.id,
-        JSON.stringify({ discoveredOrganizationId: organizationId, discoveredContactId: contact?.id ?? null }),
-      ],
-    );
-
-    res.status(201).json({ lead, organization: updatedOrg.rows[0] });
+    const succeeded = results.filter((r) => r.success).length;
+    res.status(200).json({
+      results,
+      succeeded,
+      failed: results.length - succeeded,
+    });
   } catch (err) {
     next(err);
   }

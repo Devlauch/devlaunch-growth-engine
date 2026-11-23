@@ -168,6 +168,7 @@ export const env = {
   // docs/PHASE_2_HUNTER_VALIDATION.md).
   hunterApiKey: process.env.HUNTER_API_KEY ?? null,
 
+<<<<<<< HEAD
   // Milestone 2 (P1): public, unauthenticated-by-design site-analytics
   // ingestion endpoint (routes/publicAnalytics.ts) -- same per-IP/per-key
   // fixed-window rate-limit convention as publicLeadsRateLimitPer*PerMin
@@ -379,4 +380,13 @@ export const env = {
   // comment for exactly what that blocks.
   acmeDirectoryUrl: process.env.ACME_DIRECTORY_URL ?? "https://acme-v02.api.letsencrypt.org/directory",
   acmeAccountContactEmail: process.env.ACME_ACCOUNT_CONTACT_EMAIL ?? null,
+
+  // Google Custom Search JSON API (company discovery, Phase 2 provider
+  // validation) — requires BOTH an API key and a Programmable Search
+  // Engine ID ("cx"), neither alone is sufficient, see
+  // providerCredentials.ts's resolveGoogleSearchCredential. Same
+  // dev-mode/single-tenant fallback convention as apolloApiKey above. Null
+  // in every environment this codebase has actually been run in.
+  googleSearchApiKey: process.env.GOOGLE_SEARCH_API_KEY ?? null,
+  googleSearchEngineId: process.env.GOOGLE_SEARCH_ENGINE_ID ?? null,
 };

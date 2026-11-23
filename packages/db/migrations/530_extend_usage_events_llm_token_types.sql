@@ -31,11 +31,20 @@
 -- monthly budget is already exceeded), no row is written at all, exactly
 -- like 230's own 'ai_tokens' type sat genuinely empty until a real token
 -- count existed.
+--
+-- PATCHED (Phase 2 merge reconciliation, orchestrator): this migration
+-- rewrites the constraint's FULL value list rather than adding to it, so it
+-- was found to silently drop 'google_search_call' — added by migration 446,
+-- which runs before this one — the moment this migration ran. 446's value
+-- carried forward here so it survives; never applied to any shared
+-- database before this fix, so no data-safety issue, just a sequencing bug
+-- caught before it could run anywhere.
 ALTER TABLE usage_events DROP CONSTRAINT usage_events_event_type_check;
 ALTER TABLE usage_events ADD CONSTRAINT usage_events_event_type_check
   CHECK (event_type IN (
     'agent_run', 'api_request', 'lead_captured', 'ai_tokens',
     'hunter_api_request', 'hunter_discovery', 'hunter_verification', 'hunter_request_failed',
+    'google_search_call',
     'llm_tokens_input', 'llm_tokens_output'
   ));
 
@@ -45,5 +54,6 @@ ALTER TABLE usage_events DROP CONSTRAINT usage_events_event_type_check;
 ALTER TABLE usage_events ADD CONSTRAINT usage_events_event_type_check
   CHECK (event_type IN (
     'agent_run', 'api_request', 'lead_captured', 'ai_tokens',
-    'hunter_api_request', 'hunter_discovery', 'hunter_verification', 'hunter_request_failed'
+    'hunter_api_request', 'hunter_discovery', 'hunter_verification', 'hunter_request_failed',
+    'google_search_call'
   ));

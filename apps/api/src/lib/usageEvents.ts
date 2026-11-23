@@ -24,7 +24,18 @@ export type UsageEventType =
   | "meta_ads_request_failed"
   | "whatsapp_message_sent"
   | "whatsapp_send_failed"
-  | "whatsapp_webhook_received";
+  | "whatsapp_webhook_received"
+  // Added by packages/db/migrations/446_add_google_search_call_to_usage_event_types.sql
+  // (Phase 2 reconciliation, Agent A2) — one row per real outbound call to
+  // Google's Custom Search JSON API, success or failure. Apollo has no
+  // equivalent usage_events type yet — see
+  // docs/PHASE_2_CREDENTIAL_AND_COST_REPORT.md for why that gap is
+  // documented rather than filled with an invented type. NOTE (orchestrator,
+  // merge reconciliation): migrations 530/540 each independently rewrite
+  // this same CHECK constraint's full value list — both were patched to
+  // carry 'google_search_call' forward so it survives once they run after
+  // 446 (see those migration files' own updated comments).
+  | "google_search_call";
 
 export interface RecordUsageEventParams {
   client: PoolClient;

@@ -35,11 +35,19 @@
 -- integrations.encrypted_credential_ref + credentialEncryption.ts
 -- mechanism — no new credential column or second credential-storage
 -- mechanism is introduced here.
+--
+-- PATCHED (Phase 2 merge reconciliation, orchestrator): this migration
+-- rewrites the constraint's FULL value list rather than adding to it, so it
+-- was found to silently drop 'apollo'/'google' — added by migration 445,
+-- which runs before this one — the moment this migration ran. 445's values
+-- carried forward here so they survive; never applied to any shared
+-- database before this fix.
 
 ALTER TABLE integrations DROP CONSTRAINT integrations_provider_check;
 ALTER TABLE integrations ADD CONSTRAINT integrations_provider_check
   CHECK (provider IN (
     'twenty', 'mautic', 'postiz', 'listmonk', 'posthog', 'formbricks', 'chatwoot', 'hunter',
+    'apollo', 'google',
     'clearbit', 'google_ads', 'meta_ads', 'whatsapp_business'
   ));
 
@@ -47,4 +55,4 @@ ALTER TABLE integrations ADD CONSTRAINT integrations_provider_check
 
 ALTER TABLE integrations DROP CONSTRAINT integrations_provider_check;
 ALTER TABLE integrations ADD CONSTRAINT integrations_provider_check
-  CHECK (provider IN ('twenty', 'mautic', 'postiz', 'listmonk', 'posthog', 'formbricks', 'chatwoot', 'hunter'));
+  CHECK (provider IN ('twenty', 'mautic', 'postiz', 'listmonk', 'posthog', 'formbricks', 'chatwoot', 'hunter', 'apollo', 'google'));
