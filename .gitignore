@@ -8,3 +8,8 @@ coverage/
 .env.chatwoot
 .env.listmonk
 .env.postiz
+# Local design-reference screenshots/exports — not loaded by any code,
+# just visual references used while building a page; keep out of the repo.
+public/images/*reference*
+public/images/*.Zone.Identifier
+*:Zone.Identifier

@@ -1,6 +1,7 @@
 import type { Request, Response, NextFunction } from "express";
 import { z } from "zod";
 import { pool } from "../db/pool.js";
+import { env } from "../config/env.js";
 import { Errors } from "../lib/httpError.js";
 import { logger } from "../lib/logger.js";
 
@@ -24,10 +25,17 @@ const uuidSchema = z.string().uuid();
  *      already scoped to :tenantId, this query can only ever see rows for
  *      that tenant — it cannot accidentally leak another tenant's
  *      membership rows even if something upstream were buggy.
- *   4. If no active membership is found, the whole transaction is rolled
- *      back and the client released, and the request is rejected with 403
- *      — the client-supplied tenantId was never honored without this check
- *      passing.
+ *   4. If no active membership is found, this falls through to one more
+ *      check: is the caller's own email (looked up fresh from `users` by
+ *      req.userId, never client-supplied) in env.platformAdminEmails? That
+ *      env var is a short, explicit, opt-in allowlist of real "root"
+ *      support/ops accounts (see config/env.ts) — it does NOT touch RLS or
+ *      skip app.current_tenant_id in any way, it only skips the requirement
+ *      that a memberships row exist for this specific tenant. If the email
+ *      isn't on the list either, the whole transaction is rolled back and
+ *      the client released, and the request is rejected with 403 — the
+ *      client-supplied tenantId was never honored without one of these two
+ *      checks passing.
  *   5. On success, req.tenantId / req.membershipRole / req.tenantDb are
  *      set, and req.tenantDb (already inside the tenant-scoped
  *      transaction) is what every downstream route handler must use for
@@ -35,6 +43,55 @@ const uuidSchema = z.string().uuid();
  *      client released automatically when the response finishes
  *      (see attachTenantDbLifecycle below).
  */
+/**
+ * Looks up the caller's own email fresh from `users` (never trusts
+ * req.userEmail, which is only ever populated on the JWT auth path — the
+ * dev-auth X-Dev-User-Id header fallback leaves it unset) and checks it
+ * against env.platformAdminEmails. `users` has no RLS policy (it's a global
+ * account table, see packages/db/migrations/003_create_users.sql), so this
+ * read is unaffected by the tx-local app.current_tenant_id already set on
+ * `client` for the target tenant.
+ */
+async function checkPlatformAdmin(client: import("pg").PoolClient, userId: string): Promise<boolean> {
+  if (env.platformAdminEmails.length === 0) return false;
+  const result = await client.query<{ email: string }>("SELECT email FROM users WHERE id = $1", [userId]);
+  const email = result.rows[0]?.email?.toLowerCase();
+  return email !== undefined && env.platformAdminEmails.includes(email);
+}
+
+/**
+ * Gate for genuinely cross-tenant admin routes (routes/admin.ts) — unlike
+ * requireTenantMembership, there is no single :tenantId to scope a
+ * transaction to here, so this never sets app.current_tenant_id at all; it
+ * only decides whether req.userId's email is on env.platformAdminEmails.
+ * Each admin route handler is then responsible for explicitly iterating
+ * tenants (e.g. via withTenantContext per tenant_id) rather than relying on
+ * RLS to scope a single query — see routes/admin.ts.
+ */
+export async function requirePlatformAdmin(req: Request, _res: Response, next: NextFunction): Promise<void> {
+  if (!req.userId) {
+    next(Errors.unauthorized());
+    return;
+  }
+  if (env.platformAdminEmails.length === 0) {
+    next(Errors.forbidden("No platform admins are configured"));
+    return;
+  }
+  try {
+    const result = await pool.query<{ email: string }>("SELECT email FROM users WHERE id = $1", [req.userId]);
+    const email = result.rows[0]?.email?.toLowerCase();
+    if (!email || !env.platformAdminEmails.includes(email)) {
+      logger.warn({ userId: req.userId }, "non-platform-admin tried to use an admin route");
+      next(Errors.forbidden("Platform admin access required"));
+      return;
+    }
+    req.isPlatformAdmin = true;
+    next();
+  } catch (err) {
+    next(err);
+  }
+}
+
 export async function requireTenantMembership(req: Request, res: Response, next: NextFunction): Promise<void> {
   if (!req.userId) {
     next(Errors.unauthorized());
@@ -73,11 +130,24 @@ export async function requireTenantMembership(req: Request, res: Response, next:
     );
 
     if (membershipResult.rowCount === 0) {
-      await client.query("ROLLBACK");
-      client.release();
-      settled = true;
-      logger.warn({ userId: req.userId, tenantId }, "tenant membership check failed, denying access");
-      next(Errors.forbidden("You do not have access to this tenant"));
+      const isPlatformAdmin = await checkPlatformAdmin(client, req.userId);
+      if (!isPlatformAdmin) {
+        await client.query("ROLLBACK");
+        client.release();
+        settled = true;
+        logger.warn({ userId: req.userId, tenantId }, "tenant membership check failed, denying access");
+        next(Errors.forbidden("You do not have access to this tenant"));
+        return;
+      }
+
+      logger.warn({ userId: req.userId, tenantId }, "platform admin accessing tenant without a memberships row");
+      req.tenantId = tenantId;
+      req.membershipRole = "platform_admin";
+      req.isPlatformAdmin = true;
+      req.tenantDb = client;
+
+      attachTenantDbLifecycle(req, res, client);
+      next();
       return;
     }
 

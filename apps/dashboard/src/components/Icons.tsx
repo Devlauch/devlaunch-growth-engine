@@ -181,3 +181,81 @@ export function IconTrendDown(props: SVGProps<SVGSVGElement>) {
     </Icon>
   );
 }
+
+export function IconMail(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <rect x="3" y="5" width="18" height="14" rx="2" />
+      <path d="m4 7 8 6 8-6" />
+    </Icon>
+  );
+}
+
+export function IconLock(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <rect x="5" y="11" width="14" height="9" rx="2" />
+      <path d="M8 11V8a4 4 0 0 1 8 0v3" />
+    </Icon>
+  );
+}
+
+export function IconEye(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <path d="M2 12s3.8-7 10-7 10 7 10 7-3.8 7-10 7-10-7-10-7Z" />
+      <circle cx="12" cy="12" r="3" />
+    </Icon>
+  );
+}
+
+export function IconEyeOff(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <path d="M3 3l18 18" />
+      <path d="M10.6 5.2A10.6 10.6 0 0 1 12 5c6.2 0 10 7 10 7a15.6 15.6 0 0 1-4.2 4.9M6.5 6.7C3.9 8.4 2 12 2 12s3.8 7 10 7a9.7 9.7 0 0 0 3.4-.6" />
+      <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" />
+    </Icon>
+  );
+}
+
+export function IconCheck(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <path d="m4 12 6 6L20 6" />
+    </Icon>
+  );
+}
+
+export function IconBarChart(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <path d="M4 20v-5M10 20V10M16 20V6" />
+    </Icon>
+  );
+}
+
+export function IconChevronDown(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <path d="m6 9 6 6 6-6" />
+    </Icon>
+  );
+}
+
+export function IconArrowRight(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <path d="M5 12h14M13 6l6 6-6 6" />
+    </Icon>
+  );
+}
+
+export function IconPlayCircle(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Icon {...props}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M10 9.5v5l4.5-2.5-4.5-2.5Z" fill="currentColor" stroke="none" />
+    </Icon>
+  );
+}

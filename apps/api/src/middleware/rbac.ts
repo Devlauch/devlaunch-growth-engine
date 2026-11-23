@@ -36,7 +36,15 @@ export const GTM_ROLES = ["owner", "admin", "marketer"] as const;
  */
 export function requireRole(...allowedRoles: readonly Role[]) {
   return function requireRoleMiddleware(req: Request, _res: Response, next: NextFunction): void {
-    if (!req.membershipRole || !allowedRoles.includes(req.membershipRole)) {
+    // A platform admin (env.PLATFORM_ADMIN_EMAILS, see middleware/tenant.ts)
+    // has no real memberships row and so no real role to check against any
+    // allowedRoles list — by design, it passes every role gate on every
+    // tenant it opens this way.
+    if (req.isPlatformAdmin) {
+      next();
+      return;
+    }
+    if (!req.membershipRole || !allowedRoles.includes(req.membershipRole as Role)) {
       next(Errors.forbidden(`Requires one of role: ${allowedRoles.join(", ")}`));
       return;
     }

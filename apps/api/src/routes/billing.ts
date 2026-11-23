@@ -40,6 +40,7 @@ export const billingRouter = Router({ mergeParams: true });
 billingRouter.use(requireAuth, requireTenantMembership);
 
 function requireRole(req: import("express").Request, allowed: readonly string[]) {
+  if (req.isPlatformAdmin) return;
   if (!req.membershipRole || !allowed.includes(req.membershipRole)) {
     throw Errors.forbidden(`Requires one of role: ${allowed.join(", ")}`);
   }

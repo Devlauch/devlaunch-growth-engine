@@ -8,7 +8,9 @@ declare global {
       userEmail?: string;
       /** Set by src/middleware/tenant.ts after membership is verified. */
       tenantId?: string;
-      membershipRole?: "owner" | "admin" | "marketer" | "sales" | "analyst" | "viewer" | "member";
+      membershipRole?: "owner" | "admin" | "marketer" | "sales" | "analyst" | "viewer" | "member" | "platform_admin";
+      /** true only when requireTenantMembership let this request through via env.platformAdminEmails, not a real memberships row. */
+      isPlatformAdmin?: boolean;
       /** A pg client with app.current_tenant_id set (tx-local) for this request's tenant. */
       tenantDb?: pg.PoolClient;
       /**

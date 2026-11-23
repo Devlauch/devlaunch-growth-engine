@@ -19,6 +19,19 @@ export const env = {
   // (and real JWT auth used) in any shared/production environment.
   allowDevAuth: (process.env.ALLOW_DEV_AUTH ?? "true") === "true",
 
+  // Platform-admin "root" accounts — a short, explicit allowlist of real
+  // user emails (lowercased, comma-separated) that may act on ANY tenant
+  // without a memberships row for it. This does NOT bypass RLS or any
+  // per-request tenant-scoping: see middleware/tenant.ts's
+  // requireTenantMembership, which still opens the same tx-local
+  // app.current_tenant_id context for every request — it only skips the
+  // "does a memberships row exist" check for emails in this list. Empty by
+  // default (no platform admins) so this is strictly opt-in.
+  platformAdminEmails: (process.env.PLATFORM_ADMIN_EMAILS ?? "")
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean),
+
   jwtAccessSecret: process.env.JWT_ACCESS_SECRET ?? "dev-insecure-access-secret-change-me",
   jwtRefreshSecret: process.env.JWT_REFRESH_SECRET ?? "dev-insecure-refresh-secret-change-me",
   jwtAccessTtl: process.env.JWT_ACCESS_TTL ?? "15m",

@@ -2,8 +2,9 @@ import type { ReactNode } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { useAuth } from "./auth/AuthContext";
 import { LoginPage } from "./pages/LoginPage";
-import { HomePage } from "./pages/HomePage";
+import { OnboardingPage } from "./pages/OnboardingPage";
 import { LandingPage } from "./pages/LandingPage";
+import { getLastActiveTenantId } from "./lib/lastActiveTenant";
 import { TenantPage } from "./pages/TenantPage";
 import { ProjectPage } from "./pages/ProjectPage";
 import { ExecutionPage } from "./pages/ExecutionPage";
@@ -62,20 +63,30 @@ function RequireAuth({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
-// "/" is the public landing page for signed-out visitors, and the
-// organizations dashboard for signed-in ones — same route, no separate
-// marketing path, no redirect loop with /login.
+// "/" is the public landing page for signed-out visitors, and a smart
+// redirect for signed-in ones: straight into their organization's
+// dashboard (never a list page — each account owns at most one
+// organization, see docs/DECISIONS.md), or to /onboarding if they don't
+// have one yet.
 function RootRoute() {
-  const { user, loading } = useAuth();
+  const { user, loading, memberships } = useAuth();
   if (loading) return <div className="page-loading">Loading...</div>;
   if (!user) return <LandingPage />;
-  return <HomePage />;
+  if (memberships.length === 0) return <Navigate to="/onboarding" replace />;
+
+  const lastActiveId = getLastActiveTenantId();
+  const target =
+    memberships.find((m) => m.tenantId === lastActiveId) ??
+    memberships.find((m) => m.role === "owner") ??
+    memberships[0];
+  return <Navigate to={`/tenants/${target.tenantId}`} replace />;
 }
 
 export function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/onboarding" element={<OnboardingPage />} />
       <Route path="/" element={<RootRoute />} />
       <Route
         path="/tenants/:tenantId"

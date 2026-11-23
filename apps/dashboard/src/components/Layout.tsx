@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useLocation, useParams } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { NotificationBell } from "./NotificationBell";
@@ -9,8 +9,10 @@ import {
   IconBell,
   IconBuilding,
   IconChart,
+  IconChevronDown,
   IconChevronsLeft,
   IconClose,
+  IconCompass,
   IconInbox,
   IconKey,
   IconLayers,
@@ -18,13 +20,13 @@ import {
   IconPlug,
   IconSearch,
   IconSettings,
-  IconCompass,
   IconTarget,
   IconUsers,
   IconZap,
 } from "./Icons";
 
 const SIDEBAR_COLLAPSED_KEY = "devlaunch.sidebarCollapsed";
+const NAV_GROUPS_STATE_KEY = "devlaunch.navGroupsCollapsed";
 
 // Derive short initials for the header avatar from the real logged-in user —
 // never a placeholder. Falls back to the email's first letter when no full
@@ -50,6 +52,23 @@ export interface LayoutProps {
   /** Whether the current project has a leads route/data available (always true today — kept
    * explicit so a future project type without leads can omit the nav item instead of linking nowhere). */
   hasLeads?: boolean;
+}
+
+interface NavItemDef {
+  label: string;
+  icon: ReactNode;
+  to?: string;
+  /** In-page anchor instead of a route (e.g. "#leads-section") — used for sections that live
+   * on an existing page rather than having their own route. */
+  anchor?: string;
+  /** Omit this item entirely when false (e.g. a project type without leads). */
+  show?: boolean;
+}
+
+interface NavGroupDef {
+  id: string;
+  label: string;
+  items: NavItemDef[];
 }
 
 function NavLink({
@@ -82,11 +101,71 @@ function AnchorNavItem({ href, icon, children, onClick }: { href: string; icon: 
   );
 }
 
+function loadCollapsedGroups(): Record<string, boolean> {
+  try {
+    const raw = localStorage.getItem(NAV_GROUPS_STATE_KEY);
+    return raw ? (JSON.parse(raw) as Record<string, boolean>) : {};
+  } catch {
+    return {};
+  }
+}
+
+/** A named, collapsible section of the sidebar nav (OVERVIEW, ACQUISITION, ...). Expanded by
+ * default; collapsed state is remembered per group across the whole app, not just this page. */
+function NavGroup({
+  group,
+  collapsed,
+  onToggle,
+  pathname,
+  closeMobileNav,
+}: {
+  group: NavGroupDef;
+  collapsed: boolean;
+  onToggle: () => void;
+  pathname: string;
+  closeMobileNav: () => void;
+}) {
+  const visibleItems = group.items.filter((item) => item.show !== false);
+  if (visibleItems.length === 0) return null;
+
+  return (
+    <div className="nav-group">
+      <button type="button" className="nav-group-header" onClick={onToggle} aria-expanded={!collapsed}>
+        <span>{group.label}</span>
+        <IconChevronDown width={13} height={13} className={collapsed ? "nav-group-chevron nav-group-chevron-collapsed" : "nav-group-chevron"} />
+      </button>
+      {collapsed ? null : (
+        <div className="nav-group-items">
+          {visibleItems.map((item) =>
+            item.anchor ? (
+              <AnchorNavItem key={item.label} href={item.anchor} icon={item.icon} onClick={closeMobileNav}>
+                {item.label}
+              </AnchorNavItem>
+            ) : (
+              <NavLink
+                key={item.label}
+                to={item.to as string}
+                active={pathname === item.to || pathname.startsWith(`${item.to}/`)}
+                icon={item.icon}
+                onClick={closeMobileNav}
+              >
+                {item.label}
+              </NavLink>
+            ),
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function Layout({ children, crumbs, tenantName, projectName, hasLeads = true }: LayoutProps) {
   const { user, logout } = useAuth();
   const location = useLocation();
   const { tenantId, projectId } = useParams<{ tenantId?: string; projectId?: string }>();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const profileMenuRef = useRef<HTMLDivElement>(null);
   const [collapsed, setCollapsed] = useState(() => {
     try {
       return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1";
@@ -94,6 +173,7 @@ export function Layout({ children, crumbs, tenantName, projectName, hasLeads = t
       return false;
     }
   });
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(loadCollapsedGroups);
 
   // Real per-tenant white-label theming: once inside a tenant, fetch its
   // branding (logo_url/primary_color — packages/db/migrations/
@@ -128,7 +208,20 @@ export function Layout({ children, crumbs, tenantName, projectName, hasLeads = t
   // Close the mobile nav whenever the route changes underneath it.
   useEffect(() => {
     setMobileNavOpen(false);
+    setProfileMenuOpen(false);
   }, [location.pathname]);
+
+  // Close the profile menu on an outside click.
+  useEffect(() => {
+    if (!profileMenuOpen) return;
+    function handleClick(e: MouseEvent) {
+      if (profileMenuRef.current && !profileMenuRef.current.contains(e.target as Node)) {
+        setProfileMenuOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [profileMenuOpen]);
 
   const closeMobileNav = () => setMobileNavOpen(false);
   const themeVars = brandCssVars(brand?.primaryColor);
@@ -145,6 +238,18 @@ export function Layout({ children, crumbs, tenantName, projectName, hasLeads = t
     });
   }
 
+  function toggleGroup(groupId: string) {
+    setCollapsedGroups((prev) => {
+      const next = { ...prev, [groupId]: !prev[groupId] };
+      try {
+        localStorage.setItem(NAV_GROUPS_STATE_KEY, JSON.stringify(next));
+      } catch {
+        // ignore — group expand/collapse just won't persist across reloads
+      }
+      return next;
+    });
+  }
+
   const sidebarClass = [
     "sidebar",
     mobileNavOpen ? "sidebar-open" : "",
@@ -152,6 +257,135 @@ export function Layout({ children, crumbs, tenantName, projectName, hasLeads = t
   ]
     .filter(Boolean)
     .join(" ");
+
+  const tBase = tenantId ? `/tenants/${tenantId}` : "";
+  const pBase = tenantId && projectId ? `/tenants/${tenantId}/projects/${projectId}` : "";
+
+  // Grouped exactly per the design system's named sections. Every entry maps
+  // to a real, already-existing route or in-page anchor — nothing invented.
+  // A small number of existing pages (Analytics, Lead Intelligence,
+  // Conversion Optimization, DevLaunch Acquisition, the project Onboarding
+  // wizard, Agent Executions) aren't named in that taxonomy explicitly; each
+  // is placed in the closest-fitting group rather than dropped, per "keep
+  // all existing valid routes." "Ask & Reports" (marketing-intelligence) and
+  // "Marketing Intelligence" in the spec are the same underlying route/
+  // feature in this codebase, so it appears once (Overview), not twice.
+  const navGroups: NavGroupDef[] = projectId
+    ? [
+        {
+          id: "overview",
+          label: "Overview",
+          items: [
+            { label: "Growth Dashboard", to: tBase, icon: <IconLayers /> },
+            { label: "DevLaunch Acquisition", to: `${pBase}/internal-growth`, icon: <IconTarget /> },
+            { label: "Growth Advisor", to: `${pBase}/growth-advisor`, icon: <IconBell /> },
+            { label: "Ask & Reports", to: `${pBase}/marketing-intelligence`, icon: <IconBell /> },
+          ],
+        },
+        {
+          id: "acquisition",
+          label: "Acquisition",
+          items: [
+            { label: "Discovery", to: `${pBase}/discovery`, icon: <IconCompass /> },
+            { label: "Prospecting Campaigns", to: `${pBase}/prospecting-campaigns`, icon: <IconCompass /> },
+            { label: "Leads", anchor: "#leads-section", icon: <IconUsers />, show: hasLeads },
+            { label: "Lead Intelligence", to: `${pBase}/lead-intelligence`, icon: <IconUsers /> },
+            { label: "Priority Queue", to: `${pBase}/priority-queue`, icon: <IconInbox /> },
+            { label: "Scoring", to: `${pBase}/scoring`, icon: <IconChart /> },
+          ],
+        },
+        {
+          id: "marketing",
+          label: "Marketing",
+          items: [
+            { label: "Growth Analyzer", to: `${pBase}/growth-analyzer`, icon: <IconZap /> },
+            { label: "Landing Pages", to: `${pBase}/landing-pages`, icon: <IconLayers /> },
+            { label: "Content Strategy", to: `${pBase}/content-strategy`, icon: <IconLayers /> },
+            { label: "Technical SEO", to: `${pBase}/seo`, icon: <IconSearch /> },
+            { label: "Competitors", to: `${pBase}/competitor-intelligence`, icon: <IconTarget /> },
+            { label: "Conversion Optimization", to: `${pBase}/conversion-optimization`, icon: <IconChart /> },
+            { label: "Social Content Calendar", to: `${pBase}/social-content-calendar`, icon: <IconInbox /> },
+          ],
+        },
+        {
+          id: "engagement",
+          label: "Engagement",
+          items: [
+            { label: "Campaigns", to: `${pBase}/campaigns`, icon: <IconTarget /> },
+            { label: "Listmonk (email)", to: `${pBase}/integrations/listmonk`, icon: <IconPlug /> },
+            { label: "Chatwoot (live chat)", to: `${pBase}/integrations/chatwoot`, icon: <IconPlug /> },
+            { label: "Postiz (social)", to: `${pBase}/integrations/postiz`, icon: <IconPlug /> },
+            { label: "AI Chatbot", to: `${pBase}/chatbot`, icon: <IconBell /> },
+            { label: "Widget Settings", to: `${pBase}/widget-settings`, icon: <IconKey /> },
+            { label: "Sending Setup", to: `${pBase}/sending-setup`, icon: <IconSettings /> },
+          ],
+        },
+        {
+          id: "sales",
+          label: "Sales & CRM",
+          items: [
+            { label: "Sales Pipeline", to: `${pBase}/sales-pipeline`, icon: <IconTarget /> },
+            { label: "Companies", to: `${pBase}/companies`, icon: <IconBuilding /> },
+            { label: "CRM Dashboard", to: `${pBase}/crm-dashboard`, icon: <IconChart /> },
+            { label: "Revenue Intelligence", to: `${pBase}/revenue-intelligence`, icon: <IconChart /> },
+          ],
+        },
+        {
+          id: "automation",
+          label: "Automation & Intelligence",
+          items: [
+            { label: "Workflows", to: `${pBase}/workflows`, icon: <IconZap /> },
+            { label: "Agent Executions", anchor: "#agents-section", icon: <IconZap /> },
+            { label: "AI Agent Center", to: `${pBase}/agents`, icon: <IconChart /> },
+            { label: "Workflow Automation", to: `${pBase}/workflow-automation`, icon: <IconChart /> },
+            { label: "Growth Experiments", to: `${pBase}/growth-experiments`, icon: <IconChart /> },
+            { label: "Feedback & Surveys", to: `${pBase}/feedback-surveys`, icon: <IconInbox /> },
+            { label: "Competitor Monitoring", to: `${pBase}/competitor-monitoring`, icon: <IconChart /> },
+          ],
+        },
+        {
+          id: "analytics",
+          label: "Analytics",
+          items: [
+            { label: "Analytics", to: `${pBase}/analytics`, icon: <IconChart /> },
+            { label: "Growth Analytics", to: `${pBase}/growth-analytics`, icon: <IconChart /> },
+            { label: "Site Analytics", to: `${pBase}/site-analytics`, icon: <IconChart /> },
+            { label: "Advanced Analytics", to: `${pBase}/advanced-analytics`, icon: <IconChart /> },
+            { label: "Visitor Attribution", to: `${pBase}/visitor-attribution`, icon: <IconChart /> },
+            { label: "Reports", to: `${pBase}/reports`, icon: <IconChart /> },
+          ],
+        },
+        {
+          id: "settings",
+          label: "Workspace Settings",
+          items: [
+            { label: "Branding & Profile", to: `${tBase}/branding`, icon: <IconKey /> },
+            { label: "Integrations", to: `${pBase}/integrations`, icon: <IconPlug /> },
+            { label: "Project Onboarding", to: `${pBase}/onboarding`, icon: <IconZap /> },
+            { label: "Usage", to: `${tBase}/usage`, icon: <IconChart /> },
+            { label: "Plan & Usage", to: `${tBase}/plan-usage`, icon: <IconChart /> },
+            { label: "Billing", to: `${tBase}/billing`, icon: <IconChart /> },
+            { label: "Audit Log", to: `${tBase}/audit-log`, icon: <IconInbox /> },
+            { label: "Settings", anchor: "#settings-section", icon: <IconSettings /> },
+          ],
+        },
+      ]
+    : tenantId
+      ? [
+          {
+            id: "settings",
+            label: "Workspace Settings",
+            items: [
+              { label: "Growth Dashboard", to: tBase, icon: <IconLayers /> },
+              { label: "Branding & Profile", to: `${tBase}/branding`, icon: <IconKey /> },
+              { label: "Usage", to: `${tBase}/usage`, icon: <IconChart /> },
+              { label: "Plan & Usage", to: `${tBase}/plan-usage`, icon: <IconChart /> },
+              { label: "Billing", to: `${tBase}/billing`, icon: <IconChart /> },
+              { label: "Audit Log", to: `${tBase}/audit-log`, icon: <IconInbox /> },
+            ],
+          },
+        ]
+      : [];
 
   return (
     <div className="shell" style={themeVars as React.CSSProperties | undefined}>
@@ -185,448 +419,25 @@ export function Layout({ children, crumbs, tenantName, projectName, hasLeads = t
           </div>
         </div>
 
+        {tenantId ? <div className="sidebar-workspace-label">{tenantName ?? "Organization"}</div> : null}
+        {projectId ? <div className="sidebar-workspace-sublabel">{projectName ?? "Project"}</div> : null}
+
         <nav className="sidebar-nav" aria-label="Primary">
-          <span className="nav-section-label">Workspace</span>
-          <NavLink to="/" active={location.pathname === "/"} icon={<IconBuilding />} onClick={closeMobileNav}>
-            Organizations
-          </NavLink>
-
-          {tenantId ? (
-            <>
-              <span className="nav-section-label">{tenantName ?? "Organization"}</span>
-              <NavLink
-                to={`/tenants/${tenantId}`}
-                active={location.pathname === `/tenants/${tenantId}`}
-                icon={<IconLayers />}
-                onClick={closeMobileNav}
-              >
-                Projects
-              </NavLink>
-              <NavLink
-                to={`/tenants/${tenantId}/branding`}
-                active={location.pathname === `/tenants/${tenantId}/branding`}
-                icon={<IconKey />}
-                onClick={closeMobileNav}
-              >
-                Branding & Profile
-              </NavLink>
-              <NavLink
-                to={`/tenants/${tenantId}/audit-log`}
-                active={location.pathname === `/tenants/${tenantId}/audit-log`}
-                icon={<IconInbox />}
-                onClick={closeMobileNav}
-              >
-                Audit Log
-              </NavLink>
-              <NavLink
-                to={`/tenants/${tenantId}/usage`}
-                active={location.pathname === `/tenants/${tenantId}/usage`}
-                icon={<IconChart />}
-                onClick={closeMobileNav}
-              >
-                Usage
-              </NavLink>
-              <NavLink
-                to={`/tenants/${tenantId}/plan-usage`}
-                active={location.pathname === `/tenants/${tenantId}/plan-usage`}
-                icon={<IconChart />}
-                onClick={closeMobileNav}
-              >
-                Plan &amp; Usage
-              </NavLink>
-              <NavLink
-                to={`/tenants/${tenantId}/billing`}
-                active={location.pathname === `/tenants/${tenantId}/billing`}
-                icon={<IconChart />}
-                onClick={closeMobileNav}
-              >
-                Billing
-              </NavLink>
-
-              {projectId ? (
-                <>
-                  <span className="nav-section-label">{projectName ?? "Project"}</span>
-                  <AnchorNavItem href="#agents-section" icon={<IconZap />} onClick={closeMobileNav}>
-                    Agent Executions
-                  </AnchorNavItem>
-                  {hasLeads ? (
-                    <AnchorNavItem href="#leads-section" icon={<IconUsers />} onClick={closeMobileNav}>
-                      Leads
-                    </AnchorNavItem>
-                  ) : null}
-                  <NavLink
-                    to={`/tenants/${tenantId}/projects/${projectId}/discovery`}
-                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/discovery`)}
-                    icon={<IconCompass />}
-                    onClick={closeMobileNav}
-                  >
-                    Discovery
-                  </NavLink>
-                  <NavLink
-                    to={`/tenants/${tenantId}/projects/${projectId}/prospecting-campaigns`}
-                    active={location.pathname.startsWith(
-                      `/tenants/${tenantId}/projects/${projectId}/prospecting-campaigns`,
-                    )}
-                    icon={<IconCompass />}
-                    onClick={closeMobileNav}
-                  >
-                    Prospecting Campaigns
-                  </NavLink>
-                  <NavLink
-                    to={`/tenants/${tenantId}/projects/${projectId}/priority-queue`}
-                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/priority-queue`)}
-                    icon={<IconInbox />}
-                    onClick={closeMobileNav}
-                  >
-                    Priority Queue
-                  </NavLink>
-                  <NavLink
-                    to={`/tenants/${tenantId}/projects/${projectId}/scoring`}
-                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/scoring`)}
-                    icon={<IconChart />}
-                    onClick={closeMobileNav}
-                  >
-                    Scoring
-                  </NavLink>
-                  <NavLink
-                    to={`/tenants/${tenantId}/projects/${projectId}/campaigns`}
-                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/campaigns`)}
-                    icon={<IconTarget />}
-                    onClick={closeMobileNav}
-                  >
-                    Campaigns
-                  </NavLink>
-                  <NavLink
-                    to={`/tenants/${tenantId}/projects/${projectId}/workflows`}
-                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/workflows`)}
-                    icon={<IconZap />}
-                    onClick={closeMobileNav}
-                  >
-                    Workflows
-                  </NavLink>
-                  <NavLink
-                    to={`/tenants/${tenantId}/projects/${projectId}/sales-pipeline`}
-                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/sales-pipeline`)}
-                    icon={<IconTarget />}
-                    onClick={closeMobileNav}
-                  >
-                    Sales Pipeline
-                  </NavLink>
-                  <NavLink
-                    to={`/tenants/${tenantId}/projects/${projectId}/companies`}
-                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/companies`)}
-                    icon={<IconBuilding />}
-                    onClick={closeMobileNav}
-                  >
-                    Companies
-                  </NavLink>
-                  <NavLink
-                    to={`/tenants/${tenantId}/projects/${projectId}/crm-dashboard`}
-                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/crm-dashboard`)}
-                    icon={<IconChart />}
-                    onClick={closeMobileNav}
-                  >
-                    CRM Dashboard
-                  </NavLink>
-                  <NavLink
-                    to={`/tenants/${tenantId}/projects/${projectId}/analytics`}
-                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/analytics`)}
-                    icon={<IconChart />}
-                    onClick={closeMobileNav}
-                  >
-                    Analytics
-                  </NavLink>
-                  <NavLink
-                    to={`/tenants/${tenantId}/projects/${projectId}/reports`}
-                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/reports`)}
-                    icon={<IconChart />}
-                    onClick={closeMobileNav}
-                  >
-                    Reports
-                  </NavLink>
-                  <NavLink
-                    to={`/tenants/${tenantId}/projects/${projectId}/integrations`}
-                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/integrations`)}
-                    icon={<IconPlug />}
-                    onClick={closeMobileNav}
-                  >
-                    Integrations
-                  </NavLink>
-                  <NavLink
-                    to={`/tenants/${tenantId}/projects/${projectId}/integrations/listmonk`}
-                    active={location.pathname.startsWith(
-                      `/tenants/${tenantId}/projects/${projectId}/integrations/listmonk`,
-                    )}
-                    icon={<IconPlug />}
-                    onClick={closeMobileNav}
-                  >
-                    Listmonk (email)
-                  </NavLink>
-                  <NavLink
-                    to={`/tenants/${tenantId}/projects/${projectId}/integrations/chatwoot`}
-                    active={location.pathname.startsWith(
-                      `/tenants/${tenantId}/projects/${projectId}/integrations/chatwoot`,
-                    )}
-                    icon={<IconPlug />}
-                    onClick={closeMobileNav}
-                  >
-                    Chatwoot (live chat)
-                  </NavLink>
-                  <NavLink
-                    to={`/tenants/${tenantId}/projects/${projectId}/integrations/postiz`}
-                    active={location.pathname.startsWith(
-                      `/tenants/${tenantId}/projects/${projectId}/integrations/postiz`,
-                    )}
-                    icon={<IconPlug />}
-                    onClick={closeMobileNav}
-                  >
-                    Postiz (social)
-                  </NavLink>
-                  <span className="nav-section-label">Growth Engine</span>
-                  <NavLink
-                    to={`/tenants/${tenantId}/projects/${projectId}/growth-analyzer`}
-                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/growth-analyzer`)}
-                    icon={<IconZap />}
-                    onClick={closeMobileNav}
-                  >
-                    Growth Analyzer
-                  </NavLink>
-                  <NavLink
-                    to={`/tenants/${tenantId}/projects/${projectId}/landing-pages`}
-                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/landing-pages`)}
-                    icon={<IconLayers />}
-                    onClick={closeMobileNav}
-                  >
-                    Landing Pages
-                  </NavLink>
-                  <NavLink
-                    to={`/tenants/${tenantId}/projects/${projectId}/chatbot`}
-                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/chatbot`)}
-                    icon={<IconBell />}
-                    onClick={closeMobileNav}
-                  >
-                    AI Chatbot
-                  </NavLink>
-                  <NavLink
-                    to={`/tenants/${tenantId}/projects/${projectId}/growth-analytics`}
-                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/growth-analytics`)}
-                    icon={<IconChart />}
-                    onClick={closeMobileNav}
-                  >
-                    Growth Analytics
-                  </NavLink>
-                  <NavLink
-                    to={`/tenants/${tenantId}/projects/${projectId}/site-analytics`}
-                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/site-analytics`)}
-                    icon={<IconChart />}
-                    onClick={closeMobileNav}
-                  >
-                    Site Analytics
-                  </NavLink>
-                  <NavLink
-                    to={`/tenants/${tenantId}/projects/${projectId}/growth-advisor`}
-                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/growth-advisor`)}
-                    icon={<IconBell />}
-                    onClick={closeMobileNav}
-                  >
-                    Growth Advisor
-                  </NavLink>
-                  <NavLink
-                    to={`/tenants/${tenantId}/projects/${projectId}/internal-growth`}
-                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/internal-growth`)}
-                    icon={<IconTarget />}
-                    onClick={closeMobileNav}
-                  >
-                    DevLaunch Acquisition
-                  </NavLink>
-                  <NavLink
-                    to={`/tenants/${tenantId}/projects/${projectId}/revenue-intelligence`}
-                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/revenue-intelligence`)}
-                    icon={<IconChart />}
-                    onClick={closeMobileNav}
-                  >
-                    Revenue Intelligence
-                  </NavLink>
-                  <NavLink
-                    to={`/tenants/${tenantId}/projects/${projectId}/visitor-attribution`}
-                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/visitor-attribution`)}
-                    icon={<IconChart />}
-                    onClick={closeMobileNav}
-                  >
-                    Visitor Attribution
-                  </NavLink>
-                  <NavLink
-                    to={`/tenants/${tenantId}/projects/${projectId}/agents`}
-                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/agents`)}
-                    icon={<IconChart />}
-                    onClick={closeMobileNav}
-                  >
-                    AI Agent Center
-                  </NavLink>
-                  <NavLink
-                    to={`/tenants/${tenantId}/projects/${projectId}/workflow-automation`}
-                    active={location.pathname.startsWith(
-                      `/tenants/${tenantId}/projects/${projectId}/workflow-automation`,
-                    )}
-                    icon={<IconChart />}
-                    onClick={closeMobileNav}
-                  >
-                    Workflow Automation
-                  </NavLink>
-                  <NavLink
-                    to={`/tenants/${tenantId}/projects/${projectId}/advanced-analytics`}
-                    active={location.pathname.startsWith(
-                      `/tenants/${tenantId}/projects/${projectId}/advanced-analytics`,
-                    )}
-                    icon={<IconChart />}
-                    onClick={closeMobileNav}
-                  >
-                    Advanced Analytics
-                  </NavLink>
-                  <NavLink
-                    to={`/tenants/${tenantId}/projects/${projectId}/growth-experiments`}
-                    active={location.pathname.startsWith(
-                      `/tenants/${tenantId}/projects/${projectId}/growth-experiments`,
-                    )}
-                    icon={<IconChart />}
-                    onClick={closeMobileNav}
-                  >
-                    Growth Experiments
-                  </NavLink>
-                  <NavLink
-                    to={`/tenants/${tenantId}/projects/${projectId}/feedback-surveys`}
-                    active={location.pathname.startsWith(
-                      `/tenants/${tenantId}/projects/${projectId}/feedback-surveys`,
-                    )}
-                    icon={<IconInbox />}
-                    onClick={closeMobileNav}
-                  >
-                    Feedback &amp; Surveys
-                  </NavLink>
-                  <NavLink
-                    to={`/tenants/${tenantId}/projects/${projectId}/competitor-monitoring`}
-                    active={location.pathname.startsWith(
-                      `/tenants/${tenantId}/projects/${projectId}/competitor-monitoring`,
-                    )}
-                    icon={<IconChart />}
-                    onClick={closeMobileNav}
-                  >
-                    Competitor Monitoring
-                  </NavLink>
-                  <NavLink
-                    to={`/tenants/${tenantId}/projects/${projectId}/social-content-calendar`}
-                    active={location.pathname.startsWith(
-                      `/tenants/${tenantId}/projects/${projectId}/social-content-calendar`,
-                    )}
-                    icon={<IconInbox />}
-                    onClick={closeMobileNav}
-                  >
-                    Social Content Calendar
-                  </NavLink>
-                  <span className="nav-section-label">Marketing Intelligence</span>
-                  <NavLink
-                    to={`/tenants/${tenantId}/projects/${projectId}/competitor-intelligence`}
-                    active={location.pathname.startsWith(
-                      `/tenants/${tenantId}/projects/${projectId}/competitor-intelligence`,
-                    )}
-                    icon={<IconTarget />}
-                    onClick={closeMobileNav}
-                  >
-                    Competitors
-                  </NavLink>
-                  <NavLink
-                    to={`/tenants/${tenantId}/projects/${projectId}/content-strategy`}
-                    active={location.pathname.startsWith(
-                      `/tenants/${tenantId}/projects/${projectId}/content-strategy`,
-                    )}
-                    icon={<IconLayers />}
-                    onClick={closeMobileNav}
-                  >
-                    Content Strategy
-                  </NavLink>
-                  <NavLink
-                    to={`/tenants/${tenantId}/projects/${projectId}/seo`}
-                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/seo`)}
-                    icon={<IconSearch />}
-                    onClick={closeMobileNav}
-                  >
-                    Technical SEO
-                  </NavLink>
-                  <NavLink
-                    to={`/tenants/${tenantId}/projects/${projectId}/lead-intelligence`}
-                    active={location.pathname.startsWith(
-                      `/tenants/${tenantId}/projects/${projectId}/lead-intelligence`,
-                    )}
-                    icon={<IconUsers />}
-                    onClick={closeMobileNav}
-                  >
-                    Lead Intelligence
-                  </NavLink>
-                  <NavLink
-                    to={`/tenants/${tenantId}/projects/${projectId}/conversion-optimization`}
-                    active={location.pathname.startsWith(
-                      `/tenants/${tenantId}/projects/${projectId}/conversion-optimization`,
-                    )}
-                    icon={<IconChart />}
-                    onClick={closeMobileNav}
-                  >
-                    Conversion Optimization
-                  </NavLink>
-                  <NavLink
-                    to={`/tenants/${tenantId}/projects/${projectId}/marketing-intelligence`}
-                    active={location.pathname.startsWith(
-                      `/tenants/${tenantId}/projects/${projectId}/marketing-intelligence`,
-                    )}
-                    icon={<IconBell />}
-                    onClick={closeMobileNav}
-                  >
-                    Ask &amp; Reports
-                  </NavLink>
-                  <NavLink
-                    to={`/tenants/${tenantId}/projects/${projectId}/onboarding`}
-                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/onboarding`)}
-                    icon={<IconZap />}
-                    onClick={closeMobileNav}
-                  >
-                    Onboarding
-                  </NavLink>
-                  <NavLink
-                    to={`/tenants/${tenantId}/projects/${projectId}/widget-settings`}
-                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/widget-settings`)}
-                    icon={<IconKey />}
-                    onClick={closeMobileNav}
-                  >
-                    Widget Settings
-                  </NavLink>
-                  <NavLink
-                    to={`/tenants/${tenantId}/projects/${projectId}/sending-setup`}
-                    active={location.pathname.startsWith(`/tenants/${tenantId}/projects/${projectId}/sending-setup`)}
-                    icon={<IconSettings />}
-                    onClick={closeMobileNav}
-                  >
-                    Sending Setup
-                  </NavLink>
-                  <AnchorNavItem href="#settings-section" icon={<IconKey />} onClick={closeMobileNav}>
-                    Settings
-                  </AnchorNavItem>
-                </>
-              ) : null}
-            </>
-          ) : null}
+          {navGroups.map((group) => (
+            <NavGroup
+              key={group.id}
+              group={group}
+              // When the whole sidebar is in icon-only mode, there's no
+              // room for a group header/toggle to click — always show
+              // every item (as icons) rather than let a group get stuck
+              // collapsed with no visible way to reopen it.
+              collapsed={!collapsed && Boolean(collapsedGroups[group.id])}
+              onToggle={() => toggleGroup(group.id)}
+              pathname={location.pathname}
+              closeMobileNav={closeMobileNav}
+            />
+          ))}
         </nav>
-
-        <div className="sidebar-footer">
-          {user ? (
-            <>
-              <span className="sidebar-user" title={user.email}>
-                {user.email}
-              </span>
-              <button type="button" className="btn-link" onClick={logout}>
-                Log out
-              </button>
-            </>
-          ) : null}
-        </div>
       </aside>
 
       {mobileNavOpen ? <button type="button" className="sidebar-overlay" aria-label="Close menu" onClick={closeMobileNav} /> : null}
@@ -657,9 +468,26 @@ export function Layout({ children, crumbs, tenantName, projectName, hasLeads = t
           <div className="header-actions">
             {tenantId ? <NotificationBell tenantId={tenantId} /> : null}
             {user ? (
-              <span className="header-avatar" title={user.fullName ?? user.email}>
-                {initialsFor(user.fullName, user.email)}
-              </span>
+              <div className="profile-menu" ref={profileMenuRef}>
+                <button
+                  type="button"
+                  className="header-avatar"
+                  title={user.fullName ?? user.email}
+                  onClick={() => setProfileMenuOpen((v) => !v)}
+                  aria-haspopup="menu"
+                  aria-expanded={profileMenuOpen}
+                >
+                  {initialsFor(user.fullName, user.email)}
+                </button>
+                {profileMenuOpen ? (
+                  <div className="profile-menu-dropdown" role="menu">
+                    <div className="profile-menu-email">{user.email}</div>
+                    <button type="button" className="profile-menu-item" role="menuitem" onClick={logout}>
+                      Log out
+                    </button>
+                  </div>
+                ) : null}
+              </div>
             ) : null}
           </div>
         </header>

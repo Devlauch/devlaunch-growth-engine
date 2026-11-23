@@ -66,7 +66,7 @@ export function BrandingPage() {
   // round-trip, without duplicating the real source of truth.
   const primaryColorError =
     primaryColor.trim() && !HEX_COLOR_PATTERN.test(primaryColor.trim())
-      ? "Enter a 6-digit hex color like #6d5cf0."
+      ? "Enter a 6-digit hex color like #10b981."
       : null;
 
   async function handleSave(e: FormEvent) {
@@ -185,7 +185,7 @@ export function BrandingPage() {
               <input
                 value={primaryColor}
                 onChange={(e) => setPrimaryColor(e.target.value)}
-                placeholder="#6d5cf0"
+                placeholder="#10b981"
                 maxLength={7}
               />
             </label>

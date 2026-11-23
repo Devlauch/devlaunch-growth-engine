@@ -8,6 +8,7 @@ import { notFoundHandler, errorHandler } from "./middleware/errorHandler.js";
 import { healthRouter } from "./routes/health.js";
 import { authRouter } from "./routes/auth.js";
 import { tenantsRouter } from "./routes/tenants.js";
+import { adminRouter } from "./routes/admin.js";
 import { membershipsRouter } from "./routes/memberships.js";
 import { projectsRouter } from "./routes/projects.js";
 import { profileRouter } from "./routes/profile.js";
@@ -175,6 +176,7 @@ export function createApp(): express.Express {
   app.use("/api/v1/webhooks/chatwoot", publicCors, chatwootWebhooksRouter);
 
   app.use("/api/v1/auth", mainCors, authRouter);
+  app.use("/api/v1/admin", mainCors, adminRouter);
   app.use("/api/v1/tenants", mainCors, tenantsRouter);
   app.use("/api/v1/tenants/:tenantId/memberships", mainCors, membershipsRouter);
   app.use("/api/v1/tenants/:tenantId/projects", mainCors, projectsRouter);

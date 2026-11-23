@@ -16,6 +16,7 @@ planRouter.use(requireAuth, requireTenantMembership);
 // TODO(rbac): replace with the shared requireRole/RBAC middleware once the
 // parallel RBAC work lands — this duplicate is intentional until then.
 function requireRole(req: Request, allowed: readonly string[]) {
+  if (req.isPlatformAdmin) return;
   if (!req.membershipRole || !allowed.includes(req.membershipRole)) {
     throw Errors.forbidden(`Requires one of role: ${allowed.join(", ")}`);
   }

@@ -23,6 +23,7 @@ vi.mock("../src/db/pool.js", () => ({
 
 const { tenantsRouter } = await import("../src/routes/tenants.js");
 const { errorHandler } = await import("../src/middleware/errorHandler.js");
+const { withTransaction } = await import("../src/db/pool.js");
 
 function buildApp() {
   const app = express();
@@ -41,6 +42,7 @@ beforeEach(() => {
   queryMock.mockReset();
   releaseMock.mockReset();
   connectMock.mockClear();
+  vi.mocked(withTransaction).mockReset();
 });
 
 describe("PATCH /api/v1/tenants/:tenantId (branding & onboarding fields)", () => {
@@ -191,6 +193,166 @@ describe("PATCH /api/v1/tenants/:tenantId (branding & onboarding fields)", () =>
 
     expect(res.status).toBe(403);
     expect(queryMock).not.toHaveBeenCalledWith(expect.stringContaining("UPDATE tenants"), expect.anything());
+  });
+});
+
+describe("POST /api/v1/tenants (one-owned-organization-per-user)", () => {
+  function fakeClient(queryImpl: (sql: string, params?: unknown[]) => unknown) {
+    return { query: vi.fn(async (sql: string, params?: unknown[]) => queryImpl(sql, params)) };
+  }
+
+  it("creates an organization + owner membership + default project in one transaction", async () => {
+    const app = buildApp();
+    const client = fakeClient((sql) => {
+      if (sql.startsWith("SELECT set_config")) return undefined;
+      if (sql.includes("role = 'owner' AND status = 'active' LIMIT 1")) return { rowCount: 0, rows: [] };
+      if (sql.startsWith("SELECT 1 FROM tenants WHERE slug")) return { rowCount: 0, rows: [] };
+      if (sql.startsWith("INSERT INTO tenants")) {
+        return { rowCount: 1, rows: [{ id: "t1", slug: "acme-inc", name: "Acme Inc", industry: null, status: "active", created_at: "now" }] };
+      }
+      if (sql.startsWith("INSERT INTO memberships")) return undefined;
+      if (sql.startsWith("INSERT INTO projects")) {
+        return { rowCount: 1, rows: [{ id: "p1", tenant_id: "t1", name: "Main website", slug: "main-website", status: "active", created_at: "now" }] };
+      }
+      if (sql.startsWith("INSERT INTO audit_events")) return undefined;
+      throw new Error(`unexpected query: ${sql}`);
+    });
+    vi.mocked(withTransaction).mockImplementation(async (fn: any) => fn(client));
+
+    const res = await request(app).post("/api/v1/tenants").set("X-Dev-User-Id", USER_1).send({ name: "Acme Inc" });
+
+    expect(res.status).toBe(201);
+    expect(res.body.tenant.slug).toBe("acme-inc");
+    expect(res.body.project.name).toBe("Main website");
+    const projectInsert = client.query.mock.calls.find(([sql]: [string]) => sql.startsWith("INSERT INTO projects"));
+    expect(projectInsert).toBeDefined();
+    expect(client.query.mock.calls.some(([sql]: [string]) => sql.startsWith("INSERT INTO project_profiles"))).toBe(
+      false,
+    ); // no websiteUrl given
+  });
+
+  it("stores the website URL on a project_profiles row when provided", async () => {
+    const app = buildApp();
+    const client = fakeClient((sql) => {
+      if (sql.startsWith("SELECT set_config")) return undefined;
+      if (sql.includes("role = 'owner' AND status = 'active' LIMIT 1")) return { rowCount: 0, rows: [] };
+      if (sql.startsWith("SELECT 1 FROM tenants WHERE slug")) return { rowCount: 0, rows: [] };
+      if (sql.startsWith("INSERT INTO tenants"))
+        return { rowCount: 1, rows: [{ id: "t1", slug: "acme-inc", name: "Acme Inc", industry: null, status: "active", created_at: "now" }] };
+      if (sql.startsWith("INSERT INTO memberships")) return undefined;
+      if (sql.startsWith("INSERT INTO projects"))
+        return { rowCount: 1, rows: [{ id: "p1", tenant_id: "t1", name: "Main website", slug: "main-website", status: "active", created_at: "now" }] };
+      if (sql.startsWith("INSERT INTO project_profiles")) return undefined;
+      if (sql.startsWith("INSERT INTO audit_events")) return undefined;
+      throw new Error(`unexpected query: ${sql}`);
+    });
+    vi.mocked(withTransaction).mockImplementation(async (fn: any) => fn(client));
+
+    const res = await request(app)
+      .post("/api/v1/tenants")
+      .set("X-Dev-User-Id", USER_1)
+      .send({ name: "Acme Inc", websiteUrl: "https://acme.com" });
+
+    expect(res.status).toBe(201);
+    const profileInsert = client.query.mock.calls.find(([sql]: [string]) => sql.startsWith("INSERT INTO project_profiles"));
+    expect(profileInsert).toBeDefined();
+    // params[0]/[1] are the route's own freshly-generated tenantId/projectId
+    // (not the mocked RETURNING ids) — only company_name/website_url matter here.
+    expect(profileInsert![1].slice(2)).toEqual(["Acme Inc", "https://acme.com"]);
+  });
+
+  it("returns 409 if the user already owns an organization (pre-check)", async () => {
+    const app = buildApp();
+    const client = fakeClient((sql) => {
+      if (sql.startsWith("SELECT set_config")) return undefined;
+      if (sql.includes("role = 'owner' AND status = 'active' LIMIT 1")) return { rowCount: 1, rows: [{ "?column?": 1 }] };
+      throw new Error(`unexpected query after owner pre-check: ${sql}`);
+    });
+    vi.mocked(withTransaction).mockImplementation(async (fn: any) => fn(client));
+
+    const res = await request(app).post("/api/v1/tenants").set("X-Dev-User-Id", USER_1).send({ name: "Second Co" });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error.message).toMatch(/already own an organization/i);
+  });
+
+  it("maps a unique_violation (23505) on the owner-limit constraint to 409 (concurrent create race)", async () => {
+    // Regression guard for a real bug found via live smoke-testing: this
+    // MUST key off err.constraint, never message-sniffing or "any 23505",
+    // since tenants.slug has its own, unrelated unique constraint (see the
+    // slug-collision test below) that must NOT produce this message.
+    const app = buildApp();
+    const client = fakeClient((sql) => {
+      if (sql.startsWith("SELECT set_config")) return undefined;
+      if (sql.includes("role = 'owner' AND status = 'active' LIMIT 1")) return { rowCount: 0, rows: [] };
+      if (sql.startsWith("INSERT INTO tenants"))
+        return { rowCount: 1, rows: [{ id: "t1", slug: "acme-inc", name: "Acme Inc", industry: null, status: "active", created_at: "now" }] };
+      if (sql.startsWith("INSERT INTO memberships")) {
+        const err: any = new Error('duplicate key value violates unique constraint "memberships_one_owned_tenant_per_user"');
+        err.code = "23505";
+        err.constraint = "memberships_one_owned_tenant_per_user";
+        throw err;
+      }
+      throw new Error(`unexpected query: ${sql}`);
+    });
+    vi.mocked(withTransaction).mockImplementation(async (fn: any) => fn(client));
+
+    const res = await request(app).post("/api/v1/tenants").set("X-Dev-User-Id", USER_1).send({ name: "Acme Inc" });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error.message).toMatch(/already own an organization/i);
+    expect(vi.mocked(withTransaction)).toHaveBeenCalledTimes(1); // no retry for this constraint
+  });
+
+  it("auto-suffixes the slug on a real tenants_slug_key collision instead of rejecting", async () => {
+    // Regression test for the real bug found live: a SELECT-based
+    // pre-check against `tenants` can never see another tenant's slug
+    // (RLS scopes it to the caller's own tenant/memberships — see the
+    // route's own doc comment and docs/DECISIONS.md D6), so collision
+    // detection must happen by retrying the actual INSERT on a
+    // tenants_slug_key violation, not by checking first.
+    const app = buildApp();
+    let tenantInsertAttempts = 0;
+    const client = fakeClient((sql, params) => {
+      if (sql.startsWith("SELECT set_config")) return undefined;
+      if (sql.includes("role = 'owner' AND status = 'active' LIMIT 1")) return { rowCount: 0, rows: [] };
+      if (sql.startsWith("INSERT INTO tenants")) {
+        tenantInsertAttempts += 1;
+        if (tenantInsertAttempts === 1) {
+          const err: any = new Error('duplicate key value violates unique constraint "tenants_slug_key"');
+          err.code = "23505";
+          err.constraint = "tenants_slug_key";
+          throw err;
+        }
+        const slug = (params as unknown[])[1];
+        return { rowCount: 1, rows: [{ id: "t1", slug, name: "Acme Inc", industry: null, status: "active", created_at: "now" }] };
+      }
+      if (sql.startsWith("INSERT INTO memberships")) return undefined;
+      if (sql.startsWith("INSERT INTO projects"))
+        return { rowCount: 1, rows: [{ id: "p1", tenant_id: "t1", name: "Main website", slug: "main-website", status: "active", created_at: "now" }] };
+      if (sql.startsWith("INSERT INTO audit_events")) return undefined;
+      throw new Error(`unexpected query: ${sql}`);
+    });
+    vi.mocked(withTransaction).mockImplementation(async (fn: any) => fn(client));
+
+    const res = await request(app).post("/api/v1/tenants").set("X-Dev-User-Id", USER_1).send({ name: "Acme Inc" });
+
+    expect(res.status).toBe(201);
+    expect(res.body.tenant.slug).toBe("acme-inc-2");
+    expect(tenantInsertAttempts).toBe(2);
+    expect(vi.mocked(withTransaction)).toHaveBeenCalledTimes(2); // one retry attempt
+  });
+
+  it("rejects a reserved-word slug with 400 and never starts a transaction", async () => {
+    const app = buildApp();
+
+    const res = await request(app)
+      .post("/api/v1/tenants")
+      .set("X-Dev-User-Id", USER_1)
+      .send({ name: "Admin Co", slug: "admin" });
+
+    expect(res.status).toBe(400);
+    expect(vi.mocked(withTransaction)).not.toHaveBeenCalled();
   });
 });
 

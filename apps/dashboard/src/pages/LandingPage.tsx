@@ -4,7 +4,26 @@ import { IconKey, IconLayers, IconUsers, IconZap } from "../components/Icons";
 // Public marketing/landing page, shown at "/" for signed-out visitors.
 // Hard rule: only describe real, already-built capabilities, and never show
 // fabricated metrics, customer names, logos, testimonials, or pricing tiers.
-// Signed-in visitors never see this — App.tsx renders HomePage instead.
+// Signed-in visitors never see this — App.tsx's RootRoute redirects them
+// straight to /onboarding or their organization's dashboard instead.
+
+const EXPLAINER_STEPS = [
+  {
+    title: "Turn visitors into leads",
+    body:
+      "Add one small script tag to any page on your site. Every visitor who submits a form or signs up is captured as a lead in your workspace right away — no separate form backend to build or host.",
+  },
+  {
+    title: "Understand your market with AI",
+    body:
+      "Ask the market-research agent about your industry, your competitors, or your ideal customer. It runs a structured research pass and saves the answer as a named execution you and your team can revisit anytime.",
+  },
+  {
+    title: "Act on it safely",
+    body:
+      "When an agent suggests something that actually matters — like reaching out to a lead — it's held for a real person to approve first. Nothing touches your leads or your site without someone signing off.",
+  },
+];
 
 const FEATURES = [
   {
@@ -41,12 +60,12 @@ function HeroIllustration() {
     <svg viewBox="0 0 420 360" xmlns="http://www.w3.org/2000/svg" role="presentation" aria-hidden="true">
       <defs>
         <linearGradient id="heroCardFill" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stopColor="#7c6cf5" />
-          <stop offset="100%" stopColor="#a259e6" />
+          <stop offset="0%" stopColor="#34d399" />
+          <stop offset="100%" stopColor="#0f766e" />
         </linearGradient>
         <linearGradient id="heroNodeFill" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stopColor="#6d5cf0" />
-          <stop offset="100%" stopColor="#8a7af7" />
+          <stop offset="0%" stopColor="#10b981" />
+          <stop offset="100%" stopColor="#34d399" />
         </linearGradient>
       </defs>
 
@@ -62,7 +81,7 @@ function HeroIllustration() {
       <rect x="230" y="150" width="160" height="110" rx="16" fill="#ffffff" stroke="#e6e7f0" strokeWidth="1.5" />
       <circle cx="262" cy="182" r="16" fill="url(#heroNodeFill)" />
       <path d="M254 182h16M262 174v16" stroke="#fff" strokeWidth="2.4" strokeLinecap="round" />
-      <rect x="290" y="174" width="80" height="9" rx="4.5" fill="#dcd9fb" />
+      <rect x="290" y="174" width="80" height="9" rx="4.5" fill="#bbf7d0" />
       <rect x="290" y="192" width="60" height="9" rx="4.5" fill="#edeef6" />
       <rect x="250" y="216" width="120" height="26" rx="13" fill="#f4f5fb" />
       <circle cx="266" cy="229" r="6" fill="#0f9d64" />
@@ -70,16 +89,16 @@ function HeroIllustration() {
 
       <g opacity="0.9">
         <circle cx="70" cy="270" r="26" fill="#ffffff" stroke="#e6e7f0" strokeWidth="1.5" />
-        <circle cx="70" cy="262" r="8" fill="#a259e6" />
-        <path d="M54 282c2-10 8-16 16-16s14 6 16 16" fill="#a259e6" />
+        <circle cx="70" cy="262" r="8" fill="#0f766e" />
+        <path d="M54 282c2-10 8-16 16-16s14 6 16 16" fill="#0f766e" />
       </g>
       <rect x="112" y="252" width="90" height="36" rx="12" fill="#ffffff" stroke="#e6e7f0" strokeWidth="1.5" />
-      <rect x="126" y="263" width="60" height="8" rx="4" fill="#dcd9fb" />
+      <rect x="126" y="263" width="60" height="8" rx="4" fill="#bbf7d0" />
       <rect x="126" y="276" width="40" height="8" rx="4" fill="#edeef6" />
 
       <path
         d="M96 268c20-6 34-6 46 0M262 198v18M202 270h28"
-        stroke="#b9aefc"
+        stroke="#6ee7b7"
         strokeWidth="2"
         strokeDasharray="4 5"
         fill="none"
@@ -140,7 +159,26 @@ export function LandingPage() {
           </div>
         </section>
 
-        <section className="landing-features">
+        <section className="landing-explainer" id="how-it-works">
+          <div className="landing-explainer-inner">
+            <h2 className="landing-section-title">What this actually does for your website</h2>
+            <p className="landing-section-subtitle">
+              In plain terms: it's a workspace that captures the people visiting your site, researches your market
+              for you, and only takes action once a human says yes.
+            </p>
+            <div className="landing-explainer-grid">
+              {EXPLAINER_STEPS.map((step, i) => (
+                <div className="landing-explainer-step" key={step.title}>
+                  <span className="landing-explainer-step-num">{i + 1}</span>
+                  <h3>{step.title}</h3>
+                  <p className="muted">{step.body}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section className="landing-features" id="features">
           <div className="landing-features-inner">
             <h2 className="landing-section-title">How it works</h2>
             <p className="landing-section-subtitle">What's actually built today, project by project.</p>
