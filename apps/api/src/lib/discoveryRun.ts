@@ -36,7 +36,7 @@ import { runProviderWaterfall, type WaterfallProvider, type WaterfallAttempt } f
 import { verifyEmail } from "./emailVerification.js";
 import { normalizePhone } from "./phoneVerification.js";
 import { findDuplicateOrganization, findDuplicateContact, normalizeDomain, normalizeOrgName, normalizeEmail } from "./dedup.js";
-import { findDecisionMakers } from "./decisionMakerProvider.js";
+import { findDecisionMakers, buildDecisionMakerWaterfall } from "./decisionMakerProvider.js";
 
 /**
  * Only 'public_directory' (PublicDirectoryConnector / Overpass) is approved
@@ -192,11 +192,15 @@ export async function runDiscoveryWaterfall(
 export async function lookupAndCacheDecisionMakers(
   tenantDb: pg.PoolClient,
   tenantId: string,
+  projectId: string,
   organizationId: string,
   organizationName: string,
   domain: string | null,
 ) {
-  const outcome = await findDecisionMakers({ organizationName, domain });
+  const outcome = await findDecisionMakers(
+    { organizationName, domain },
+    await buildDecisionMakerWaterfall(tenantDb, tenantId, projectId),
+  );
   const result = await tenantDb.query(
     `INSERT INTO decision_maker_cache (tenant_id, organization_id, provider, status, contacts, attempts, looked_up_at)
      VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, now())
@@ -364,6 +368,7 @@ export async function persistDiscoveryResult(
     const decisionMakerLookup = await lookupAndCacheDecisionMakers(
       tenantDb,
       tenantId,
+      projectId,
       orgRow.id as string,
       orgRow.name as string,
       (orgRow.domain as string | null) ?? null,

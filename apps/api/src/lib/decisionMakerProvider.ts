@@ -23,7 +23,10 @@
  * prepend it in the waterfall built by `findDecisionMakers` below.
  */
 
+import type { PoolClient } from "pg";
 import { runProviderWaterfall } from "./providerWaterfall.js";
+import { ApolloDecisionMakerProvider } from "./apolloDecisionMakerProvider.js";
+import { resolveApolloApiKey } from "./providerCredentials.js";
 
 export class NotConfiguredError extends Error {
   constructor(message: string) {
@@ -89,16 +92,31 @@ export class NotConfiguredDecisionMakerProvider implements DecisionMakerProvider
 }
 
 /**
- * The decision-maker provider waterfall used in production. A real provider
- * (Apollo/ZoomInfo/etc), once credentials exist, is added here ahead of the
- * stub — `findDecisionMakers` below doesn't change at all when that
- * happens, since it only ever depends on the `DecisionMakerProvider`
- * interface via `runProviderWaterfall`. Exported (rather than inlined) so a
- * test or an alternate caller can swap it out without reimplementing the
- * wiring.
+ * The decision-maker provider waterfall used in production. When a tenant's
+ * Apollo credential resolves (via `providerCredentials.ts#resolveApolloApiKey`
+ * — tenant's own stored credential first, `env.apolloApiKey` fallback second,
+ * same convention as every other real provider in this codebase), a real
+ * `ApolloDecisionMakerProvider` is prepended ahead of the honest stub; when it
+ * doesn't resolve (or no tenant context is supplied at all, e.g. a caller with
+ * no request scope), the stub alone is returned exactly as before. Callers
+ * with tenant context (discoveryRun.ts) pass it; `findDecisionMakers`'s own
+ * no-args default below deliberately does not, since it has no tenant scope
+ * to resolve a credential against.
  */
-export function buildDecisionMakerWaterfall(): DecisionMakerProvider[] {
-  return [new NotConfiguredDecisionMakerProvider()];
+export async function buildDecisionMakerWaterfall(
+  tenantDb?: Pick<PoolClient, "query">,
+  tenantId?: string,
+  projectId?: string,
+): Promise<DecisionMakerProvider[]> {
+  const providers: DecisionMakerProvider[] = [];
+  if (tenantDb && tenantId && projectId) {
+    const apiKey = await resolveApolloApiKey(tenantDb, tenantId, projectId);
+    if (apiKey) {
+      providers.push(new ApolloDecisionMakerProvider(apiKey));
+    }
+  }
+  providers.push(new NotConfiguredDecisionMakerProvider());
+  return providers;
 }
 
 export interface DecisionMakerLookupOutcome {
@@ -121,10 +139,11 @@ export interface DecisionMakerLookupOutcome {
  */
 export async function findDecisionMakers(
   input: DecisionMakerLookupInput,
-  providers: DecisionMakerProvider[] = buildDecisionMakerWaterfall(),
+  providers?: DecisionMakerProvider[],
 ): Promise<DecisionMakerLookupOutcome> {
+  const resolvedProviders = providers ?? (await buildDecisionMakerWaterfall());
   const outcome = await runProviderWaterfall(
-    providers.map((p) => ({
+    resolvedProviders.map((p) => ({
       name: p.name,
       run: (i: DecisionMakerLookupInput) => p.findDecisionMakers(i),
     })),

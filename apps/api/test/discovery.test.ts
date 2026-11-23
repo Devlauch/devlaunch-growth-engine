@@ -365,6 +365,7 @@ describe("discovery-sources run endpoint", () => {
         rowCount: 1,
         rows: [{ id: ORG_1, name: "Springfield Diner", domain: "springfielddiner.example" }],
       }, // INSERT discovered_organizations
+      { rowCount: 0, rows: [] }, // getIntegrationCredential (apollo) -- no tenant credential configured
       {
         rowCount: 1,
         rows: [{ id: "dmc-1", organization_id: ORG_1, status: "not_configured", provider: null, contacts: [] }],
@@ -440,6 +441,7 @@ describe("POST /discovery-sources/run (multi-provider waterfall)", () => {
       { rowCount: 0, rows: [] }, // findDuplicateOrganization: by domain
       { rowCount: 0, rows: [] }, // findDuplicateOrganization: by name fallback
       { rowCount: 1, rows: [{ id: ORG_1, name: "Acme Inc", domain: "acme.com" }] }, // INSERT discovered_organizations
+      { rowCount: 0, rows: [] }, // getIntegrationCredential (apollo) -- no tenant credential configured
       { rowCount: 1, rows: [{ id: "dmc-1", status: "not_configured" }] }, // decision_maker_cache upsert
       undefined, // INSERT audit_events
     ]);
@@ -863,6 +865,7 @@ describe("POST /discovered-organizations/:id/decision-makers", () => {
         rowCount: 1,
         rows: [{ id: ORG_1, project_id: PROJECT_1, name: "Acme Inc", domain: "acme.com" }],
       }, // loadOrganizationOr404
+      { rowCount: 0, rows: [] }, // getIntegrationCredential (apollo) -- no tenant credential configured
       {
         rowCount: 1,
         rows: [{ id: "dmc-1", organization_id: ORG_1, status: "not_configured", provider: null, contacts: [] }],

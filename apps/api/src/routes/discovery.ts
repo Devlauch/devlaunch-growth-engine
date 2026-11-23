@@ -68,6 +68,7 @@ async function loadOrganizationOr404(req: Request, organizationId: string) {
  */
 async function lookupAndCacheDecisionMakers(
   req: Request,
+  projectId: string,
   organizationId: string,
   organizationName: string,
   domain: string | null,
@@ -75,6 +76,7 @@ async function lookupAndCacheDecisionMakers(
   return sharedLookupAndCacheDecisionMakers(
     req.tenantDb!,
     req.tenantId as string,
+    projectId,
     organizationId,
     organizationName,
     domain,
@@ -837,6 +839,7 @@ discoveredOrganizationsRouter.post("/:id/decision-makers", async (req, res, next
 
     const cacheRow = await lookupAndCacheDecisionMakers(
       req,
+      projectId,
       organizationId,
       organization.name as string,
       (organization.domain as string | null) ?? null,
