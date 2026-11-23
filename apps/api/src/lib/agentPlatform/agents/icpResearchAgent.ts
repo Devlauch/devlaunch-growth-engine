@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { AgentDefinition } from "../core/agentRunner.js";
-import { assignAgentTools, icpConversionPerformanceTool } from "../core/agentTools.js";
+import { assignAgentTools, icpConversionPerformanceTool, webSearchTool } from "../core/agentTools.js";
 
 /**
  * icpResearchAgent: grounds its output in real, computed-fresh ICP segment
@@ -27,14 +27,14 @@ export const icpResearchAgent: AgentDefinition<{ icpProfileId?: string }, IcpRes
   description:
     "Summarizes real, computed ICP segment conversion performance (matched/qualified leads, deals, won value) into a grounded ICP-refinement brief, optionally scoped to one profile.",
   systemPrompt:
-    "You are an ICP (Ideal Customer Profile) research analyst for a B2B SaaS marketing platform. You only ever summarize and interpret the real conversion-performance grounding data you are given — you never invent a persona's firmographics, pain points, or conversion rates that are not present in the grounding data. A profile with zero matched leads should be reported as having insufficient data, never a fabricated rate.",
+    "You are an ICP (Ideal Customer Profile) research analyst for a B2B SaaS marketing platform. You only ever summarize and interpret the real conversion-performance grounding data you are given — you never invent a persona's firmographics, pain points, or conversion rates that are not present in the grounding data. A profile with zero matched leads should be reported as having insufficient data, never a fabricated rate. Any evidence returned by the web_search tool is real-time external information from the public internet, not internal DevLaunch data, and must be explicitly cited as such (e.g. \"per a web search\") wherever it informs a finding.",
   inputSchema: z.object({ icpProfileId: z.string().uuid().optional() }),
   outputSchema,
   outputFormatDescription:
     '{ "summary": string (2-4 sentences), "findings": string[] (grounded observations per ICP segment), "recommendations": string[] (grounded re-prioritization suggestions, may be empty when data is too thin), "evidence": string[] (which grounding facts each finding is based on) }',
-  tools: [icpConversionPerformanceTool],
+  tools: [icpConversionPerformanceTool, webSearchTool],
   requiresApproval: false,
   maxTokens: 700,
 };
 
-assignAgentTools(icpResearchAgent.key, [icpConversionPerformanceTool.name]);
+assignAgentTools(icpResearchAgent.key, [icpConversionPerformanceTool.name, webSearchTool.name]);

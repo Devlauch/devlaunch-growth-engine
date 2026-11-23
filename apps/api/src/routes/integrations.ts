@@ -59,6 +59,15 @@ const PROVIDERS = [
   // googleClient.ts and packages/db/migrations/445_add_apollo_and_google_to_integrations.sql.
   { key: "apollo", label: "Apollo", category: "enrichment" },
   { key: "google", label: "Google Search", category: "discovery" },
+  // People Data Labs (company/person enrichment, a fourth additive option
+  // alongside hunter/clearbit/apollo — see
+  // apps/api/src/lib/peopleDataLabsProvider.ts) and Abstract API
+  // (email/phone verification, additive alongside the free DNS/MX and
+  // E.164-format checks — see apps/api/src/lib/abstractApiProvider.ts), both
+  // given the same real per-tenant connection path — see
+  // packages/db/migrations/648_add_pdl_and_abstract_api_to_integrations.sql.
+  { key: "people_data_labs", label: "People Data Labs", category: "enrichment" },
+  { key: "abstract_api", label: "Abstract API", category: "verification" },
 ] as const;
 
 // The providers that actually build a real connection (health-check calls
@@ -75,6 +84,8 @@ const REAL_PROVIDERS = new Set([
   "whatsapp_business",
   "apollo",
   "google",
+  "people_data_labs",
+  "abstract_api",
 ]);
 
 type ProviderKey = (typeof PROVIDERS)[number]["key"];
@@ -151,7 +162,7 @@ integrationsRouter.get("/", async (req, res, next) => {
 
     res.json({
       integrations,
-      note: "listmonk, chatwoot, postiz, hunter, apollo, and google support a real per-tenant connection (encrypted credential + health-check); every other provider remains registry-only in this phase.",
+      note: "listmonk, chatwoot, postiz, hunter, apollo, google, people_data_labs, and abstract_api support a real per-tenant connection (encrypted credential + health-check); every other provider remains registry-only in this phase.",
     });
   } catch (err) {
     next(err);

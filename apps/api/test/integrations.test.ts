@@ -89,7 +89,7 @@ describe("GET /integrations — real registry, never a fabricated 'connected' st
       .set("X-Dev-User-Id", USER_1);
 
     expect(res.status).toBe(200);
-    expect(res.body.integrations).toHaveLength(14);
+    expect(res.body.integrations).toHaveLength(16);
     expect(res.body.integrations.some((i: { provider: string }) => i.provider === "chatwoot")).toBe(true);
     expect(res.body.integrations.some((i: { provider: string }) => i.provider === "hunter")).toBe(true);
     expect(res.body.integrations.some((i: { provider: string }) => i.provider === "clearbit")).toBe(true);
@@ -98,6 +98,8 @@ describe("GET /integrations — real registry, never a fabricated 'connected' st
     expect(res.body.integrations.some((i: { provider: string }) => i.provider === "whatsapp_business")).toBe(true);
     expect(res.body.integrations.some((i: { provider: string }) => i.provider === "apollo")).toBe(true);
     expect(res.body.integrations.some((i: { provider: string }) => i.provider === "google")).toBe(true);
+    expect(res.body.integrations.some((i: { provider: string }) => i.provider === "people_data_labs")).toBe(true);
+    expect(res.body.integrations.some((i: { provider: string }) => i.provider === "abstract_api")).toBe(true);
     expect(res.body.integrations.every((i: { status: string }) => i.status === "not_connected")).toBe(true);
   });
 

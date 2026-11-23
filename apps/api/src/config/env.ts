@@ -193,6 +193,53 @@ export const env = {
   anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? null,
   anthropicModel: process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-5-20250929",
 
+  // OpenAI (apps/api/src/lib/llmProvider.ts's OpenAiLlmProvider) — same
+  // optional/graceful-degradation convention as anthropicApiKey above.
+  openaiApiKey: process.env.OPENAI_API_KEY ?? null,
+  openaiModel: process.env.OPENAI_MODEL ?? "gpt-4o",
+
+  // OpenAI embeddings (apps/api/src/lib/embeddingProvider.ts's
+  // OpenAiEmbeddingProvider) — deliberately reuses openaiApiKey above
+  // rather than a separate credential (there is only one OpenAI account to
+  // configure); only the model id differs from chat completions, so it
+  // gets its own var. Defaults to "text-embedding-3-small", OpenAI's
+  // current small/cheap embedding model (platform.openai.com/docs/guides/embeddings).
+  embeddingModel: process.env.EMBEDDING_MODEL ?? "text-embedding-3-small",
+
+  // xAI Grok (apps/api/src/lib/llmProvider.ts's GrokLlmProvider, same
+  // OpenAI-compatible Chat Completions shape as OpenAI itself, different
+  // base URL/model id) — same optional/graceful-degradation convention.
+  grokApiKey: process.env.GROK_API_KEY ?? null,
+  grokModel: process.env.GROK_MODEL ?? "grok-2-latest",
+
+  // Google Gemini (apps/api/src/lib/llmProvider.ts's GeminiLlmProvider,
+  // generateContent REST API — auth via `key` query param, not a header,
+  // unlike every other provider here) — same optional/graceful-degradation
+  // convention. FREE-TIER DATA-USE NOTE: per Google's own AI Studio/Gemini
+  // API pricing docs, free-tier prompts/responses may be used by Google to
+  // improve its products (the paid tier disclaims this) — see the
+  // disclosure in llmProvider.ts's header comment before setting this.
+  geminiApiKey: process.env.GEMINI_API_KEY ?? null,
+  geminiModel: process.env.GEMINI_MODEL ?? "gemini-2.5-flash-lite",
+
+  // Groq (apps/api/src/lib/llmProvider.ts's GroqLlmProvider — groq.com, the
+  // fast-inference company; NOT xAI's "Grok" above, a frequent name
+  // collision). OpenAI-Chat-Completions-compatible API, same convention.
+  groqApiKey: process.env.GROQ_API_KEY ?? null,
+  groqModel: process.env.GROQ_MODEL ?? "llama-3.3-70b-versatile",
+
+  // Explicit provider selection when more than one of the five keys above
+  // is set at once ("anthropic" | "openai" | "grok" | "gemini" | "groq");
+  // null = auto-pick the first configured one in that fixed priority
+  // order. See llmProvider.ts's getLlmProvider() doc comment.
+  llmProviderOverride: (process.env.LLM_PROVIDER ?? null) as
+    | "anthropic"
+    | "openai"
+    | "grok"
+    | "gemini"
+    | "groq"
+    | null,
+
   // Milestone 5: per-tenant monthly LLM token budget (input + output tokens
   // combined), enforced by apps/api/src/lib/llmBudget.ts. `null`/unset means
   // unlimited (no LLM-specific budget check — the quota.ts plan-limit
@@ -364,6 +411,32 @@ export const env = {
   // jwtAccessSecret when unset, same as that module does.
   leadMagnetDownloadSecret: process.env.LEAD_MAGNET_DOWNLOAD_SECRET ?? null,
 
+  // Cloudflare R2 — real, pluggable cloud object-storage backend for
+  // FileStorage (apps/api/src/lib/r2FileStorage.ts), the drop-in alternative
+  // to leadMagnetFilesDir's local-disk default once a real account exists.
+  // R2 exposes an S3-API-compatible endpoint
+  // (https://<ACCOUNT_ID>.r2.cloudflarestorage.com/<bucket>/<key>), signed
+  // with hand-rolled AWS SigV4 — see r2FileStorage.ts's header comment for
+  // the full citation trail. getActiveFileStorage() (fileStorage.ts) uses
+  // R2FileStorage ONLY when all four of r2AccountId/r2AccessKeyId/
+  // r2SecretAccessKey/r2Bucket are set; otherwise it falls back to
+  // LocalDiskFileStorage, same optional/graceful-degradation convention as
+  // googlePageSpeedApiKey/calendlyApiKey above — all null in every
+  // environment this codebase has actually been run in, since no real
+  // Cloudflare account exists here.
+  r2AccountId: process.env.R2_ACCOUNT_ID ?? null,
+  r2AccessKeyId: process.env.R2_ACCESS_KEY_ID ?? null,
+  r2SecretAccessKey: process.env.R2_SECRET_ACCESS_KEY ?? null,
+  r2Bucket: process.env.R2_BUCKET ?? null,
+  // Optional: an R2 bucket's public r2.dev dev URL or a custom domain
+  // mapped to the bucket. When set, getSignedDownloadUrl() returns a direct
+  // public URL instead of minting a SigV4 presigned GET URL. Null (the
+  // default) means files are only reachable via the signed-GET path this
+  // app mints per request — same as LocalDiskFileStorage today, just
+  // backed by a real presigned R2 URL instead of this app's own HMAC
+  // scheme.
+  r2PublicBaseUrl: process.env.R2_PUBLIC_BASE_URL ?? null,
+
   // Custom-domain DNS verification (apps/api/src/lib/customDomainVerification.ts).
   // The TXT record a tenant must publish is `_devlaunch-verify.<domain>`;
   // this prefix is configurable only so a self-hosted fork can rebrand it
@@ -380,6 +453,23 @@ export const env = {
   acmeDirectoryUrl: process.env.ACME_DIRECTORY_URL ?? "https://acme-v02.api.letsencrypt.org/directory",
   acmeAccountContactEmail: process.env.ACME_ACCOUNT_CONTACT_EMAIL ?? null,
 
+  // Milestone 7: pluggable web-search providers for agent-platform tools
+  // that need real-time, outside-DevLaunch information (see
+  // apps/api/src/lib/webSearchProvider.ts, agentTools.ts's webSearchTool).
+  // Optional — null in this environment: no real Tavily/Serper API key is
+  // available here, in which case getWebSearchProvider() returns the
+  // honest NotConfiguredWebSearchProvider and webSearchTool reports
+  // { status: "not_configured" } rather than fabricating search results.
+  // Same injectable/graceful-degradation convention as hunterApiKey/
+  // serpApiKey above.
+  tavilyApiKey: process.env.TAVILY_API_KEY ?? null,
+  serperApiKey: process.env.SERPER_API_KEY ?? null,
+  // Explicit provider selection when both keys above are set at once
+  // ("tavily" | "serper"); null = auto-pick the first configured one, in
+  // priority order tavily > serper. See webSearchProvider.ts's
+  // getWebSearchProvider() doc comment.
+  webSearchProviderOverride: (process.env.WEB_SEARCH_PROVIDER ?? null) as "tavily" | "serper" | null,
+
   // Google Custom Search JSON API (company discovery, Phase 2 provider
   // validation) — requires BOTH an API key and a Programmable Search
   // Engine ID ("cx"), neither alone is sufficient, see
@@ -388,4 +478,69 @@ export const env = {
   // in every environment this codebase has actually been run in.
   googleSearchApiKey: process.env.GOOGLE_SEARCH_API_KEY ?? null,
   googleSearchEngineId: process.env.GOOGLE_SEARCH_ENGINE_ID ?? null,
+
+  // Qdrant vector database (apps/api/src/lib/qdrantClient.ts) — the
+  // platform's semantic-retrieval store, new this round. Optional — null in
+  // every environment this codebase has actually run in: no real Qdrant
+  // Cloud cluster or self-hosted instance is reachable here, in which case
+  // getQdrantClient() returns the honest NotConfiguredVectorStore and
+  // semanticSearchTool (agentTools.ts) reports { status: "not_configured" }
+  // rather than fabricating search results. Same injectable/
+  // graceful-degradation convention as hunterApiKey/tavilyApiKey above.
+  // qdrantApiKey is required for Qdrant Cloud (sent as the `api-key`
+  // header) but optional for a self-hosted instance with no auth configured.
+  qdrantUrl: process.env.QDRANT_URL ?? null,
+  qdrantApiKey: process.env.QDRANT_API_KEY ?? null,
+
+  // Internal product-usage analytics (apps/api/src/lib/productAnalytics.ts)
+  // — PostHog Cloud's hosted Capture API, used ONLY for this platform's own
+  // internal product telemetry (agent runs, workflow executions, tenant
+  // signups), never for the tenant-facing site_visitors/site_sessions
+  // website-analytics feature (see siteAnalytics.ts, which is untouched and
+  // unrelated). Optional — null in every environment this codebase has
+  // actually been run in: no real PostHog project token is available here,
+  // in which case isProductAnalyticsConfigured() is false and
+  // captureProductEvent() is an honest no-op, same convention as
+  // hunterApiKey/calendlyApiKey above. posthogHost defaults to PostHog
+  // Cloud's US region; set to "https://eu.posthog.com" for an EU-region
+  // project.
+  posthogApiKey: process.env.POSTHOG_API_KEY ?? null,
+  posthogHost: process.env.POSTHOG_HOST ?? "https://app.posthog.com",
+
+  // Error monitoring (Sentry) — see apps/api/src/index.ts's Sentry.init()
+  // call and middleware/errorHandler.ts. Optional — null in every
+  // environment this codebase has actually been run in: no real Sentry DSN
+  // is available here, in which case Sentry.init() is simply never called
+  // (see index.ts's doc comment for why that's safe) and
+  // errorHandler.ts/apps/worker's job-failure handlers skip
+  // Sentry.captureException entirely. Unlike every other credential in this
+  // file, a DSN is not a secret — Sentry's own docs say it's safe to ship in
+  // a public frontend bundle — but this platform only wires Sentry
+  // server-side for now, so it is read from env like everything else here.
+  sentryDsn: process.env.SENTRY_DSN ?? null,
+
+  // People Data Labs (company/person enrichment, a fourth B2B data provider
+  // added alongside hunter/clearbit/apollo — see
+  // apps/api/src/lib/peopleDataLabsProvider.ts). A tenant's own encrypted
+  // credential (POST /integrations/people_data_labs/connect) always takes
+  // priority; this is only a dev-mode/single-tenant fallback, same
+  // convention as hunterApiKey/clearbitApiKey/apolloApiKey above. Null in
+  // every environment this codebase has actually been run in — no real
+  // People Data Labs API key is available here, so
+  // PeopleDataLabsProvider's "valid credential" path is real, working
+  // client code, built and reviewed against PDL's own published API docs,
+  // but never exercised against the live API.
+  peopleDataLabsApiKey: process.env.PEOPLE_DATA_LABS_API_KEY ?? null,
+
+  // Abstract API (email + phone validation, additive alongside the
+  // existing free DNS/MX email check and E.164-format phone check — see
+  // apps/api/src/lib/abstractApiProvider.ts). A tenant's own encrypted
+  // credential (POST /integrations/abstract_api/connect) always takes
+  // priority; this is only a dev-mode/single-tenant fallback, same
+  // convention as hunterApiKey above. Null in every environment this
+  // codebase has actually been run in — no real Abstract API key is
+  // available here, so AbstractApiEmailVerificationProvider/
+  // AbstractApiPhoneVerificationProvider's "valid credential" paths are
+  // real, working client code, never exercised against the live API.
+  abstractApiKey: process.env.ABSTRACT_API_KEY ?? null,
 };

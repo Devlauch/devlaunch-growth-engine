@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { AgentDefinition } from "../core/agentRunner.js";
-import { assignAgentTools, growthAnalysisReadTool, siteAnalyticsSummaryTool } from "../core/agentTools.js";
+import { assignAgentTools, growthAnalysisReadTool, siteAnalyticsSummaryTool, webSearchTool } from "../core/agentTools.js";
 
 /**
  * marketResearchAgent: grounds its output in ONE real, existing
@@ -25,14 +25,14 @@ export const marketResearchAgent: AgentDefinition<{ growthAnalysisId: string }, 
   description:
     "Summarizes a project's real, existing website growth-analysis record (crawled products/services, value propositions, target-audience signals) alongside its real site-traffic aggregates into a grounded market-research brief.",
   systemPrompt:
-    "You are a market research analyst for a B2B SaaS marketing platform. You only ever summarize and interpret the real grounding data you are given — you never invent market size, competitor names, or statistics that are not present in the grounding data. If the grounding data is thin, say so plainly instead of padding the response.",
+    "You are a market research analyst for a B2B SaaS marketing platform. You only ever summarize and interpret the real grounding data you are given — you never invent market size, competitor names, or statistics that are not present in the grounding data. If the grounding data is thin, say so plainly instead of padding the response. Any evidence returned by the web_search tool is real-time external information from the public internet, not internal DevLaunch data, and must be explicitly cited as such (e.g. \"per a web search\") wherever it informs a finding.",
   inputSchema: z.object({ growthAnalysisId: z.string().uuid() }),
   outputSchema,
   outputFormatDescription:
     '{ "summary": string (2-4 sentences), "findings": string[] (specific, grounded observations), "opportunities": string[] (grounded growth opportunities, may be empty), "evidence": string[] (which grounding facts each finding is based on; empty only if findings is also empty) }',
-  tools: [growthAnalysisReadTool, siteAnalyticsSummaryTool],
+  tools: [growthAnalysisReadTool, siteAnalyticsSummaryTool, webSearchTool],
   requiresApproval: false,
   maxTokens: 700,
 };
 
-assignAgentTools(marketResearchAgent.key, [growthAnalysisReadTool.name, siteAnalyticsSummaryTool.name]);
+assignAgentTools(marketResearchAgent.key, [growthAnalysisReadTool.name, siteAnalyticsSummaryTool.name, webSearchTool.name]);

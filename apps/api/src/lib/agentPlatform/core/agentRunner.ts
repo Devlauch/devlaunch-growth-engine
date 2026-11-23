@@ -5,6 +5,7 @@ import { isLlmBudgetExceeded, recordLlmUsage } from "../../llmBudget.js";
 import { logger } from "../../logger.js";
 import type { AgentTool, AgentToolContext } from "./agentTools.js";
 import { recordAgentRun } from "./agentMemory.js";
+import { captureProductEvent } from "../../productAnalytics.js";
 
 /**
  * agentRunner.ts: Workstream A1 core — the native, tenant-aware agent
@@ -219,6 +220,7 @@ export async function runAgent<TInput, TOutput>(
   context: AgentRunContext,
 ): Promise<AgentRunResult<TOutput>> {
   definition.inputSchema.parse(input);
+  const startedAtMs = Date.now();
 
   const provider = getLlmProvider();
   if (!provider.isConfigured) {
@@ -261,14 +263,40 @@ export async function runAgent<TInput, TOutput>(
 
     if (attempt.validationError || attempt.parsed === null) {
       await persistRun(context, definition.key, input, null, "error", tokensUsed);
+      // Internal product analytics: a real agent run completing (even an
+      // error outcome is a completion worth knowing about for internal
+      // product-usage tracking — see productAnalytics.ts's doc comment for
+      // why this is never the tenant-facing analytics feature).
+      captureProductEvent("agent_run_completed", context.tenantId, {
+        agentKey: definition.key,
+        projectId: context.projectId,
+        status: "error",
+        tokensUsed,
+        durationMs: Date.now() - startedAtMs,
+      });
       return { status: "error", output: null, evidence, tokensUsed, error: attempt.validationError ?? "invalid output" };
     }
 
     await persistRun(context, definition.key, input, attempt.parsed, "ok", tokensUsed);
+    captureProductEvent("agent_run_completed", context.tenantId, {
+      agentKey: definition.key,
+      projectId: context.projectId,
+      status: "ok",
+      tokensUsed,
+      durationMs: Date.now() - startedAtMs,
+    });
     return { status: "ok", output: attempt.parsed, evidence, tokensUsed };
   } catch (err) {
     logger.warn({ err, agentKey: definition.key, tenantId: context.tenantId }, "agentRunner: LLM call failed, reporting error status");
     await persistRun(context, definition.key, input, null, "error", 0);
+    captureProductEvent("agent_run_completed", context.tenantId, {
+      agentKey: definition.key,
+      projectId: context.projectId,
+      status: "error",
+      tokensUsed: 0,
+      durationMs: Date.now() - startedAtMs,
+      error: err instanceof Error ? err.message : String(err),
+    });
     return { status: "error", output: null, tokensUsed: 0, error: err instanceof Error ? err.message : String(err) };
   }
 }

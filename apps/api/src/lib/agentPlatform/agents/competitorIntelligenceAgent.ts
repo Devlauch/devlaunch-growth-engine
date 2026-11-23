@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { AgentDefinition } from "../core/agentRunner.js";
-import { assignAgentTools, competitorSnapshotTool } from "../core/agentTools.js";
+import { assignAgentTools, competitorSnapshotTool, webSearchTool } from "../core/agentTools.js";
 
 /**
  * competitorIntelligenceAgent: grounds its output in ONE tracked
@@ -26,14 +26,14 @@ export const competitorIntelligenceAgent: AgentDefinition<{ competitorId: string
   description:
     "Summarizes one tracked competitor's real, latest crawled snapshot and recently detected site changes into a grounded competitive-positioning brief.",
   systemPrompt:
-    "You are a competitive intelligence analyst for a B2B SaaS marketing platform. You only ever summarize and interpret the real grounding data you are given about ONE named competitor — you never invent pricing, feature claims, or roadmap information that is not present in the grounding data. If no recent changes were detected, say so plainly instead of fabricating activity.",
+    "You are a competitive intelligence analyst for a B2B SaaS marketing platform. You only ever summarize and interpret the real grounding data you are given about ONE named competitor — you never invent pricing, feature claims, or roadmap information that is not present in the grounding data. If no recent changes were detected, say so plainly instead of fabricating activity. Any evidence returned by the web_search tool is real-time external information from the public internet, not internal DevLaunch data, and must be explicitly cited as such (e.g. \"per a web search\") wherever it informs a finding.",
   inputSchema: z.object({ competitorId: z.string().uuid() }),
   outputSchema,
   outputFormatDescription:
     '{ "summary": string (2-4 sentences about this one competitor), "positioningSignals": string[] (grounded observations about their messaging/keywords), "recentChanges": string[] (plain-English restatements of real detected changes; empty if none), "evidence": string[] (which grounding facts each claim is based on) }',
-  tools: [competitorSnapshotTool],
+  tools: [competitorSnapshotTool, webSearchTool],
   requiresApproval: false,
   maxTokens: 700,
 };
 
-assignAgentTools(competitorIntelligenceAgent.key, [competitorSnapshotTool.name]);
+assignAgentTools(competitorIntelligenceAgent.key, [competitorSnapshotTool.name, webSearchTool.name]);

@@ -1,4 +1,5 @@
 import dns from "node:dns";
+import type { PoolClient } from "pg";
 import { runProviderWaterfall } from "./providerWaterfall.js";
 
 /**
@@ -260,6 +261,36 @@ export function buildEmailVerificationWaterfall(
   options: { resolver?: Pick<typeof dns.promises, "resolveMx"> } = {},
 ): EmailVerificationProvider[] {
   return [new NotConfiguredBounceVerificationProvider(), new DnsEmailVerificationProvider(options.resolver)];
+}
+
+/**
+ * Tenant-aware waterfall, additive alongside `buildEmailVerificationWaterfall`
+ * above (which is unchanged and still used wherever no tenant context is
+ * available): when a tenant's own Abstract API credential (or
+ * ABSTRACT_API_KEY dev-mode fallback) resolves via
+ * `abstractApiProvider.ts#resolveAbstractApiKey` — same per-tenant
+ * encrypted-credential convention every other real provider in this
+ * codebase uses — a real `AbstractApiEmailVerificationProvider` is
+ * PREPENDED ahead of the existing `[NotConfiguredBounceVerificationProvider,
+ * DnsEmailVerificationProvider]` pair. Abstract API's deliverability check
+ * (a real SMTP-level signal) is a strictly stronger answer than the free
+ * DNS/MX-only check, so it is tried first; the free tier remains the
+ * fallback when Abstract API itself errors (rate-limited, network failure,
+ * etc.) or isn't configured for this tenant, so this is a pure addition —
+ * never a regression for a tenant with no Abstract API credential.
+ */
+export async function buildEmailVerificationWaterfallForTenant(
+  tenantDb: Pick<PoolClient, "query">,
+  tenantId: string,
+  projectId: string,
+  options: { resolver?: Pick<typeof dns.promises, "resolveMx"> } = {},
+): Promise<EmailVerificationProvider[]> {
+  const { buildAbstractApiEmailProvider } = await import("./abstractApiProvider.js");
+  const abstractApi = await buildAbstractApiEmailProvider(tenantDb, tenantId, projectId);
+  const providers: EmailVerificationProvider[] = [];
+  if (abstractApi) providers.push(abstractApi);
+  providers.push(...buildEmailVerificationWaterfall(options));
+  return providers;
 }
 
 export async function verifyEmail(email: string, options: VerifyEmailOptions = {}): Promise<EmailVerificationResult> {

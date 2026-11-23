@@ -19,6 +19,7 @@ import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { env } from "../config/env.js";
 import { buildSignedDownload } from "./signedDownloadUrl.js";
+import { R2FileStorage } from "./r2FileStorage.js";
 
 export interface FileStorageUploadResult {
   /** Opaque storage key — persisted (e.g. in lead_magnets.storage_key), passed back into getSignedDownloadUrl/delete. */
@@ -145,7 +146,40 @@ export class NotConfiguredS3FileStorage implements FileStorage {
   }
 }
 
-/** The FileStorage backend used in production. Swap for NotConfiguredS3FileStorage's real implementation once credentials exist. */
-export function buildFileStorage(): FileStorage {
+/**
+ * Resolves the real FileStorage backend for this process:
+ *   - R2FileStorage (r2FileStorage.ts) when ALL FOUR required R2 credentials
+ *     (r2AccountId/r2AccessKeyId/r2SecretAccessKey/r2Bucket) are configured
+ *     — a real Cloudflare R2 bucket, picked up once and used for the whole
+ *     process lifetime.
+ *   - LocalDiskFileStorage otherwise (the default in every environment this
+ *     codebase has actually been run in, since no real R2 account exists
+ *     here — see env.ts's r2AccountId doc comment).
+ *
+ * Deliberately NOT re-checked per-call / re-resolved mid-operation: which
+ * backend is active is decided once, at startup, from static config, never
+ * silently switched at runtime based on a transient failure. If R2 is
+ * configured but a real call to it fails (bad credentials, network error,
+ * R2-side 5xx), that failure is thrown to the caller as a real error — it
+ * is NEVER caught here and silently retried against local disk, which would
+ * risk the exact bug this round's spec calls out: data landing in two
+ * different places depending on timing, with no way to know which backend
+ * actually holds a given file.
+ */
+export function getActiveFileStorage(): FileStorage {
+  if (env.r2AccountId && env.r2AccessKeyId && env.r2SecretAccessKey && env.r2Bucket) {
+    return new R2FileStorage({
+      accountId: env.r2AccountId,
+      accessKeyId: env.r2AccessKeyId,
+      secretAccessKey: env.r2SecretAccessKey,
+      bucket: env.r2Bucket,
+      publicBaseUrl: env.r2PublicBaseUrl,
+    });
+  }
   return new LocalDiskFileStorage();
+}
+
+/** The FileStorage backend used in production. Alias for getActiveFileStorage() — kept for every existing call site (routes/leadMagnetUploads.ts) so this round's R2 wiring is a drop-in, not a rewrite of any upload-route code. */
+export function buildFileStorage(): FileStorage {
+  return getActiveFileStorage();
 }

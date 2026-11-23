@@ -5,6 +5,7 @@ import { withTransaction, withUserContext } from "../db/pool.js";
 import { requireAuth } from "../middleware/auth.js";
 import { requireTenantMembership } from "../middleware/tenant.js";
 import { Errors } from "../lib/httpError.js";
+import { captureProductEvent } from "../lib/productAnalytics.js";
 
 export const tenantsRouter = Router();
 tenantsRouter.use(requireAuth);
@@ -89,6 +90,15 @@ tenantsRouter.post("/", async (req, res, next) => {
       );
 
       return inserted.rows[0];
+    });
+
+    // Internal product analytics: a real new tenant signup — see
+    // productAnalytics.ts's doc comment (internal product-usage telemetry
+    // only, unrelated to the tenant-facing site analytics feature).
+    captureProductEvent("tenant_created", tenant.id, {
+      slug: tenant.slug,
+      industry: tenant.industry,
+      createdByUserId: req.userId,
     });
 
     res.status(201).json({ tenant });

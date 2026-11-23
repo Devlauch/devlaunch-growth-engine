@@ -1,3 +1,4 @@
+import type { PoolClient } from "pg";
 import { runProviderWaterfall } from "./providerWaterfall.js";
 
 /**
@@ -131,6 +132,31 @@ export class NotConfiguredCarrierLookupProvider implements PhoneVerificationProv
  */
 export function buildPhoneVerificationWaterfall(): PhoneVerificationProvider[] {
   return [new NotConfiguredCarrierLookupProvider(), new FormatPhoneVerificationProvider()];
+}
+
+/**
+ * Tenant-aware waterfall, additive alongside `buildPhoneVerificationWaterfall`
+ * above (unchanged, still used wherever no tenant context is available):
+ * when a tenant's own Abstract API credential (or ABSTRACT_API_KEY dev-mode
+ * fallback) resolves via `abstractApiProvider.ts#resolveAbstractApiKey`, a
+ * real `AbstractApiPhoneVerificationProvider` is PREPENDED ahead of the
+ * existing `[NotConfiguredCarrierLookupProvider,
+ * FormatPhoneVerificationProvider]` pair — Abstract API's real
+ * carrier/line-type lookup is a strictly stronger signal than the free
+ * E.164-format-only check, so it is tried first; the free tier remains the
+ * fallback when Abstract API errors or isn't configured for this tenant.
+ */
+export async function buildPhoneVerificationWaterfallForTenant(
+  tenantDb: Pick<PoolClient, "query">,
+  tenantId: string,
+  projectId: string,
+): Promise<PhoneVerificationProvider[]> {
+  const { buildAbstractApiPhoneProvider } = await import("./abstractApiProvider.js");
+  const abstractApi = await buildAbstractApiPhoneProvider(tenantDb, tenantId, projectId);
+  const providers: PhoneVerificationProvider[] = [];
+  if (abstractApi) providers.push(abstractApi);
+  providers.push(...buildPhoneVerificationWaterfall());
+  return providers;
 }
 
 export async function verifyPhone(

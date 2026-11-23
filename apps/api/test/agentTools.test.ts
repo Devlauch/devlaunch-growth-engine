@@ -3,9 +3,12 @@ import type { PoolClient } from "pg";
 import {
   leadActivityTimelineTool,
   siteAnalyticsSummaryTool,
+  webSearchTool,
+  semanticSearchTool,
   getToolsForAgent,
   getTool,
 } from "../src/lib/agentPlatform/core/agentTools.js";
+import * as webSearchProvider from "../src/lib/webSearchProvider.js";
 // Importing the agent definitions registry triggers each agent module's
 // assignAgentTools() side effect (see agents/leadResearchAgent.ts etc.) —
 // same "import for its registration side effect" pattern as routes/*.ts
@@ -67,5 +70,52 @@ describe("siteAnalyticsSummaryTool", () => {
   it("only accepts the fields it declares (sinceDays), ignoring any other input fields handed to it", () => {
     const parsed = siteAnalyticsSummaryTool.inputSchema.parse({ sinceDays: 14, leadId: "ignored-by-this-tool" } as any);
     expect(parsed).toEqual({ sinceDays: 14 });
+  });
+});
+
+describe("webSearchTool", () => {
+  const context = { tenantDb: fakeClient().client, tenantId: TENANT_ID, projectId: PROJECT_ID, actorUserId: null };
+
+  it("returns { status: \"not_configured\", results: [] } rather than throwing when no web-search provider is configured — an expected, non-error state", async () => {
+    vi.spyOn(webSearchProvider, "getWebSearchProvider").mockReturnValue(new webSearchProvider.NotConfiguredWebSearchProvider());
+
+    const result = await webSearchTool.execute({ query: "DevLaunch competitors" }, context);
+
+    expect(result).toEqual({ status: "not_configured", results: [] });
+  });
+
+  it("returns { status: \"ok\", results } from the configured provider's real search() call", async () => {
+    const fakeResults = [{ title: "T", url: "https://example.com", snippet: "s", publishedDate: null }];
+    const fakeProvider = {
+      name: "tavily",
+      isConfigured: true,
+      search: vi.fn().mockResolvedValue(fakeResults),
+    };
+    vi.spyOn(webSearchProvider, "getWebSearchProvider").mockReturnValue(fakeProvider as any);
+
+    const result = await webSearchTool.execute({ query: "DevLaunch competitors", maxResults: 3 }, context);
+
+    expect(result).toEqual({ status: "ok", results: fakeResults });
+    expect(fakeProvider.search).toHaveBeenCalledWith("DevLaunch competitors", { maxResults: 3 });
+  });
+
+  it("only accepts query (required) and maxResults (optional, 1-10), rejecting an out-of-range maxResults", () => {
+    expect(() => webSearchTool.inputSchema.parse({ query: "x", maxResults: 11 })).toThrow();
+    expect(webSearchTool.inputSchema.parse({ query: "x" })).toEqual({ query: "x" });
+  });
+});
+
+describe("semanticSearchTool", () => {
+  it("is registered but NOT assigned to any agent (deliberate scope limit — no indexing pipeline exists yet)", () => {
+    expect(getTool("semantic_search")).toBeDefined();
+  });
+
+  it("returns { status: 'not_configured', results: [] } rather than throwing when no embedding provider/Qdrant instance is configured (the real state of this test environment: no OPENAI_API_KEY/QDRANT_URL)", async () => {
+    const { client } = fakeClient();
+    const result = await semanticSearchTool.execute(
+      { query: "how do refunds work", collection: "docs" },
+      { tenantDb: client, tenantId: TENANT_ID, projectId: PROJECT_ID, actorUserId: null },
+    );
+    expect(result).toEqual({ status: "not_configured", results: [] });
   });
 });

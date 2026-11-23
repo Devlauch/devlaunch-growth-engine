@@ -2,6 +2,7 @@ import type { PoolClient } from "pg";
 import { createHash } from "node:crypto";
 import { advanceDueEnrollments } from "./advanceSequences.js";
 import { notify, notifyTenantOwnersAndAdmins, type NotificationType } from "./notify.js";
+import { captureProductEvent } from "./productAnalytics.js";
 
 /**
  * workflowEngine: a real, native, tenant-aware lifecycle-workflow
@@ -388,6 +389,7 @@ export async function runWorkflow(
   context: RunWorkflowContext,
 ): Promise<string> {
   const { tenantDb, tenantId, projectId, leadId } = context;
+  const startedAtMs = Date.now();
 
   const defResult = await tenantDb.query<WorkflowDefinitionRow>(
     `SELECT id, tenant_id, project_id, nodes, status
@@ -506,6 +508,19 @@ export async function runWorkflow(
     `UPDATE workflow_executions SET status = $1, error = $2, finished_at = now() WHERE id = $3 AND tenant_id = $4`,
     [failed ? "failed" : "completed", failureMessage, executionId, tenantId],
   );
+
+  // Internal product analytics: a real workflow execution completing (only
+  // for a genuinely new run through the DAG above, not the idempotent
+  // early-return paths — those didn't actually execute anything). See
+  // productAnalytics.ts's doc comment: this is internal product-usage
+  // telemetry only, unrelated to the tenant-facing site analytics feature.
+  captureProductEvent("workflow_execution_completed", tenantId, {
+    workflowId: definitionId,
+    projectId,
+    executionId,
+    status: failed ? "failed" : "completed",
+    durationMs: Date.now() - startedAtMs,
+  });
 
   return executionId;
 }

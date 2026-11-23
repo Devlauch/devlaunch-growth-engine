@@ -122,14 +122,26 @@ export async function buildDecisionMakerWaterfall(
 /**
  * Tenant-aware waterfall (Milestone 6 / P5): composes the real providers
  * this codebase has built so far — Hunter (hunterProvider.ts), Clearbit
- * (clearbitProvider.ts), then Apollo (apolloProvider.ts, Phase 2 provider
- * validation) — ahead of the honest NotConfiguredDecisionMakerProvider
- * stub, each resolved per-tenant via integrationCredentials.ts. Each entry
- * independently falls back to its own NotConfigured* stub when that
- * specific provider has no credential for this tenant/project, so a
- * waterfall run always has at least one real attempt recorded even when
- * every provider is unconfigured (all "not configured" errors, same
- * `findDecisionMakers()` classification as before).
+ * (clearbitProvider.ts), Apollo (apolloProvider.ts, Phase 2 provider
+ * validation), then People Data Labs (peopleDataLabsProvider.ts, added as a
+ * fourth, additive company/person data option) — ahead of the honest
+ * NotConfiguredDecisionMakerProvider stub, each resolved per-tenant via
+ * integrationCredentials.ts. Each entry independently falls back to its own
+ * NotConfigured* stub when that specific provider has no credential for
+ * this tenant/project, so a waterfall run always has at least one real
+ * attempt recorded even when every provider is unconfigured (all "not
+ * configured" errors, same `findDecisionMakers()` classification as
+ * before).
+ *
+ * People Data Labs is placed LAST among the real providers (before the
+ * NotConfigured stub), not interleaved with Hunter/Clearbit/Apollo: its
+ * `findDecisionMakers` adapter honestly never attempts a network call for
+ * this waterfall's input shape (see peopleDataLabsProvider.ts's
+ * `PeopleDataLabsProvider` doc comment — PDL's Person Enrichment API
+ * requires a person-identifying field `DecisionMakerLookupInput` never
+ * supplies), so it only ever produces a `no_result` attempt here today.
+ * Keeping it last means Hunter/Clearbit/Apollo — which can all genuinely
+ * answer from domain/organization name alone — are always tried first.
  *
  * This is additive — `buildDecisionMakerWaterfall()` above is unchanged and
  * still used wherever a synchronous, env-only waterfall is wanted (e.g.
@@ -144,12 +156,14 @@ export async function buildDecisionMakerWaterfallForTenant(
   const { buildHunterProvider } = await import("./hunterProvider.js");
   const { buildClearbitProvider } = await import("./clearbitProvider.js");
   const { buildApolloProvider } = await import("./apolloProvider.js");
-  const [hunter, clearbit, apollo] = await Promise.all([
+  const { buildPeopleDataLabsProvider } = await import("./peopleDataLabsProvider.js");
+  const [hunter, clearbit, apollo, peopleDataLabs] = await Promise.all([
     buildHunterProvider(tenantDb, tenantId, projectId),
     buildClearbitProvider(tenantDb, tenantId, projectId),
     buildApolloProvider(tenantDb, tenantId, projectId),
+    buildPeopleDataLabsProvider(tenantDb, tenantId, projectId),
   ]);
-  return [hunter, clearbit, apollo, new NotConfiguredDecisionMakerProvider()];
+  return [hunter, clearbit, apollo, peopleDataLabs, new NotConfiguredDecisionMakerProvider()];
 }
 
 export interface DecisionMakerLookupOutcome {

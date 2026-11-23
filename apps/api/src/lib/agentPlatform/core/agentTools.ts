@@ -3,6 +3,9 @@ import { z } from "zod";
 import { getLeadActivityTimeline, type ActivityItem } from "../../activityTimeline.js";
 import { computeSiteAnalytics, type SiteAnalytics } from "../../siteAnalytics.js";
 import { computeIcpConversionPerformance, type IcpConversionPerformance } from "../../icpRefinement.js";
+import { getWebSearchProvider, type WebSearchResult } from "../../webSearchProvider.js";
+import { getEmbeddingProvider } from "../../embeddingProvider.js";
+import { getQdrantClient, type QdrantSearchResult } from "../../qdrantClient.js";
 
 /**
  * agentTools.ts: Workstream A1, a minimal tool-calling abstraction for the
@@ -214,8 +217,92 @@ export const icpConversionPerformanceTool: AgentTool<{ icpProfileId?: string }, 
   },
 };
 
+/**
+ * Reads real, live external web-search results via the pluggable
+ * webSearchProvider.ts (Tavily/Serper) — the one tool in this registry
+ * that is NOT a read-only query against an internal DevLaunch table, since
+ * its whole purpose is external research grounding (market/competitor/ICP
+ * agents need real-time information this platform's own tables don't
+ * have). Unlike every other tool here, a not-configured external provider
+ * is an expected, common, non-error state (no real Tavily/Serper key
+ * exists in most environments) — so this tool returns a
+ * `{ status: "not_configured" }` result rather than throwing, letting the
+ * calling agent's run continue and report that gap in its own evidence
+ * rather than crashing the whole run.
+ */
+export const webSearchTool: AgentTool<
+  { query: string; maxResults?: number },
+  { status: "ok"; results: WebSearchResult[] } | { status: "not_configured"; results: WebSearchResult[] }
+> = {
+  name: "web_search",
+  description:
+    "Searches the live public web (via Tavily or Serper, whichever is configured) for real-time, outside-DevLaunch information. Returns { status: \"not_configured\", results: [] } if no web-search provider is configured in this environment — not an error.",
+  inputSchema: z.object({ query: z.string().min(1).max(500), maxResults: z.number().int().min(1).max(10).optional() }),
+  async execute(input) {
+    const provider = getWebSearchProvider();
+    if (!provider.isConfigured) {
+      return { status: "not_configured" as const, results: [] };
+    }
+    return { status: "ok" as const, results: await provider.search(input.query, { maxResults: input.maxResults }) };
+  },
+};
+
+/**
+ * Semantic search over a Qdrant vector collection — new ground this round
+ * (see qdrantClient.ts/embeddingProvider.ts). Requires BOTH a configured
+ * embedding provider (to embed the query text) AND a configured Qdrant
+ * instance (to search); if either is missing this tool returns
+ * `{ status: "not_configured", results: [] }` rather than throwing — same
+ * graceful, non-throwing "expected external-dependency-missing state"
+ * convention as webSearchTool above, since no real OpenAI/Qdrant
+ * credentials exist in most environments.
+ *
+ * CRITICAL: this tool calls `getQdrantClient().searchForTenant()`, NEVER
+ * the raw unscoped `search()` (which qdrantClient.ts doesn't even export
+ * for this purpose) — every result returned is filtered server-side to
+ * `payload.tenant_id === context.tenantId`, the tenant-isolation boundary
+ * for the vector store documented in qdrantClient.ts's header comment.
+ *
+ * DELIBERATE SCOPE LIMIT: this tool is registered below but NOT assigned to
+ * any agent via assignAgentTools() — there is no real indexed content in
+ * any Qdrant collection yet (no ingestion/indexing pipeline exists in this
+ * round), so attaching it to an agent now would let that agent call a tool
+ * that can only ever return either "not_configured" or an empty/irrelevant
+ * result set. A future round should build the indexing pipeline for a
+ * specific collection first, then assign this tool to the agent(s) that
+ * collection is meant to ground.
+ */
+export const semanticSearchTool: AgentTool<
+  { query: string; collection: string; limit?: number },
+  { status: "ok"; results: QdrantSearchResult[] } | { status: "not_configured"; results: QdrantSearchResult[] }
+> = {
+  name: "semantic_search",
+  description:
+    "Performs tenant-scoped semantic (vector) search over a named Qdrant collection. Returns { status: \"not_configured\", results: [] } if no embedding provider or Qdrant instance is configured in this environment — not an error.",
+  inputSchema: z.object({
+    query: z.string().min(1).max(2000),
+    collection: z.string().min(1).max(200),
+    limit: z.number().int().min(1).max(50).optional(),
+  }),
+  async execute(input, context) {
+    const embeddingProvider = getEmbeddingProvider();
+    const qdrant = getQdrantClient();
+    if (!embeddingProvider.isConfigured || !qdrant.isConfigured) {
+      return { status: "not_configured" as const, results: [] };
+    }
+    const [vector] = await embeddingProvider.embed([input.query]);
+    const results = await qdrant.searchForTenant(input.collection, context.tenantId, vector, { limit: input.limit });
+    return { status: "ok" as const, results };
+  },
+};
+
 registerTool(leadActivityTimelineTool);
 registerTool(siteAnalyticsSummaryTool);
 registerTool(competitorSnapshotTool);
 registerTool(growthAnalysisReadTool);
 registerTool(icpConversionPerformanceTool);
+registerTool(webSearchTool);
+registerTool(semanticSearchTool);
+// NOTE: semanticSearchTool is registered but deliberately NOT assigned to
+// any agent (see its own doc comment above) — this is a scope limit, not an
+// oversight.

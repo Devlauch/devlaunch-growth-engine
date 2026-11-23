@@ -1,3 +1,20 @@
+// Sentry must be initialized before any other import that could throw (same
+// convention as apps/api/src/index.ts — see that file's doc comment).
+// SENTRY_DSN is read directly from process.env, not via config/env.js, so
+// this stays the very first thing this process does.
+import * as Sentry from "@sentry/node";
+
+if (process.env.SENTRY_DSN) {
+  // Explicit, not implicit: Sentry.init() is only ever called when a real
+  // DSN is configured. Without SENTRY_DSN set, this block is skipped and
+  // Sentry.init() is never called for this process.
+  Sentry.init({
+    dsn: process.env.SENTRY_DSN,
+    environment: process.env.NODE_ENV,
+    tracesSampleRate: 0.1,
+  });
+}
+
 import { Worker, type Job } from "bullmq";
 import { AGENT_RUN_QUEUE_NAME, createRedisConnection, type AgentRunJobData } from "./queue.js";
 import { withTenantContext, pool, assertDatabaseRoleRespectsRls } from "./db.js";
@@ -68,6 +85,7 @@ async function processAgentRun(job: Job<AgentRunJobData>): Promise<void> {
       );
     });
     log.error({ err }, "execution failed");
+    Sentry.captureException(err);
     throw err;
   }
 }
@@ -83,6 +101,7 @@ worker.on("completed", (job) => {
 
 worker.on("failed", (job, err) => {
   logger.error({ jobId: job?.id, err }, "job failed");
+  Sentry.captureException(err);
 });
 
 logger.info({ queue: AGENT_RUN_QUEUE_NAME }, "worker started, waiting for jobs");
